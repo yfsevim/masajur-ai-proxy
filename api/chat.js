@@ -38,6 +38,10 @@ Destek saatleri: 12:00 – 22:00
 - Satış odaklı ol ama baskı yapma.
 - Markdown, yıldız işareti veya kalın yazı kullanma.
 - Madde işareti yerine düz kısa satırlar kullan.
+- Linki sadece kullanıcı satın alma niyeti gösterirse paylaş.
+- Her cevapta link verme.
+- Cevap maksimum 5 kısa paragraf olsun.
+- Gereksiz kapanış cümlesi yazma.
 `,
         messages: [
           {
