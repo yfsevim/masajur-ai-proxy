@@ -1,3 +1,4 @@
+console.log("YENI DEPLOY CALISTI");
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
