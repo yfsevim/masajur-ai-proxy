@@ -27,9 +27,7 @@ module.exports = async (req, res) => {
 
     const data = await response.json();
 
-    return res.status(200).json({
-      reply: data.content?.[0]?.text || "Yanıt alınamadı"
-    });
+    return res.status(200).json(data);
 
   } catch (error) {
     return res.status(500).json({ error: error.message });
