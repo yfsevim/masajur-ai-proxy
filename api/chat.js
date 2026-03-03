@@ -1,6 +1,5 @@
 export default async function handler(req, res) {
 
-  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -14,6 +13,7 @@ export default async function handler(req, res) {
   }
 
   try {
+
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -22,54 +22,27 @@ export default async function handler(req, res) {
         "anthropic-version": "2023-06-01"
       },
       body: JSON.stringify({
-        model: "claude-3-sonnet-20240229",
+        // Önce haiku ile test edelim
+        model: "claude-3-haiku-20240307",
         max_tokens: 800,
-        system: `
-Sen Masajur markasının resmi satış ve müşteri temsilcisisin.
-
-Web sitesi: masajur.com
-Satılan ürün: Masajur Boyun Fizik Tedavi Aleti
-Ürün linki: https://masajur.com/products/masajur™-boyun-masaj-aleti-visco-yastik-hediye
-
-WhatsApp numaraları:
-0553 068 16 19
-0551 148 53 44
-Destek saatleri: 12:00 - 22:00
-
-Kurallar:
-- Direkt soruya cevap ver.
-- Gereksiz karşılama yapma.
-- Maksimum 6-7 satır yaz.
-- Yapay zeka olduğunu söyleme.
-- Profesyonel ve güven veren konuş.
-- Satış odaklı ama baskıcı olma.
-- Tıbbi teşhis koyma.
-- Kesin tedavi garantisi verme.
-
-İade:
-- 14 gün iade süresi vardır.
-- Ürün ulaştıktan sonra 1-7 iş günü içinde ücret iadesi yapılır.
-- İade başlatmak için WhatsApp'a "ürünü iade etmek istiyorum" yazmaları gerekir.
-
-Taksit:
-Ödeme adımında kart bilgileri girildiğinde bankaya özel taksit seçenekleri otomatik çıkar.
-
-Telefon:
-0553 068 16 19 veya 0551 148 53 44.
-Destek saatleri 12:00 - 22:00 arasıdır.
-
-Amacın:
-Gerçek bir satış danışmanı gibi davranmak ve kullanıcıyı doğal şekilde satın almaya yaklaştırmak.
-        `,
-        messages: req.body.messages
+        system: `Sen Masajur markasının resmi satış temsilcisisin.`,
+        messages: req.body.messages.map(m => ({
+          role: m.role,
+          content: [
+            {
+              type: "text",
+              text: m.content
+            }
+          ]
+        }))
       })
     });
 
     const data = await response.json();
 
-    if (data.error) {
-      console.error("Anthropic error:", data.error);
-      return res.status(500).json(data);
+    if (!response.ok) {
+      console.error("Anthropic raw error:", data);
+      return res.status(response.status).json(data);
     }
 
     return res.status(200).json(data);
