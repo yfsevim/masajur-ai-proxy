@@ -2,14 +2,20 @@ import Anthropic from "@anthropic-ai/sdk";
 
 export const config = {
   runtime: "nodejs",
+  regions: ["iad1"]
 };
 
 export default async function handler(req, res) {
+
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(500).json({ error: "API key not found in env" });
+    }
+
     const anthropic = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY,
     });
@@ -23,12 +29,11 @@ export default async function handler(req, res) {
     return res.status(200).json(response);
 
   } catch (error) {
-    // GERÇEK HATAYI GÖRMEK İÇİN DETAYLI DÖNDÜRÜYORUZ
     return res.status(500).json({
-      error_name: error.name,
-      error_message: error.message,
-      error_status: error.status,
-      error_response: error.response?.data || null
+      name: error.name,
+      message: error.message,
+      status: error.status,
+      stack: error.stack
     });
   }
 }
