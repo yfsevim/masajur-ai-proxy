@@ -1,8 +1,0 @@
-{
-  "name": "masajur-canli-destek",
-  "version": "1.0.0",
-  "scripts": {
-    "start": "node api/chat.js"
-  },
-  "dependencies": {}
-}
