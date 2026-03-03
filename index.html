@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canlı Destek</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f4f9; display: flex; justify-content: center; padding-top: 50px; }
+        #chat-container { width: 350px; background: white; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); padding: 20px; }
+        #chatbox { height: 300px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; margin-bottom: 10px; background: #fafafa; }
+        .message { margin-bottom: 10px; line-height: 1.4; font-size: 14px; }
+        .user-msg { color: #0056b3; text-align: right; }
+        .bot-msg { color: #333; text-align: left; }
+        #input-area { display: flex; gap: 5px; }
+        input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 5px; outline: none; }
+        button { padding: 10px 15px; background: #0056b3; color: white; border: none; border-radius: 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+<div id="chat-container">
+    <h3 style="margin-top:0; color:#333; text-align:center;">Canlı Destek</h3>
+    <div id="chatbox"></div>
+    <div id="input-area">
+        <input type="text" id="userInput" placeholder="Bir şey sorun..." onkeypress="if(event.key === 'Enter') sendMessage()">
+        <button onclick="sendMessage()">Gönder</button>
+    </div>
+</div>
+<script>
+    async function sendMessage() {
+        const input = document.getElementById('userInput');
+        const message = input.value.trim();
+        if (!message) return;
+        const chatbox = document.getElementById('chatbox');
+        chatbox.innerHTML += `<div class="message user-msg"><b>Siz:</b> ${message}</div>`;
+        input.value = '';
+        chatbox.scrollTop = chatbox.scrollHeight;
+        try {
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messages: [{ role: "user", content: message }] })
+            });
+            const data = await response.json();
+            if(data.error) {
+                 chatbox.innerHTML += `<div class="message bot-msg" style="color:red;"><b>Hata:</b> ${data.error}</div>`;
+                 return;
+            }
+            chatbox.innerHTML += `<div class="message bot-msg"><b>Asistan:</b> ${data.content[0].text}</div>`;
+            chatbox.scrollTop = chatbox.scrollHeight;
+        } catch (error) {
+            chatbox.innerHTML += `<div class="message bot-msg" style="color:red;"><b>Bağlantı Hatası</b></div>`;
+        }
+    }
+</script>
+</body>
+</html>
