@@ -18,12 +18,7 @@ export default async function handler(req, res) {
     const response = await anthropic.messages.create({
       model: "claude-3-haiku-20240307",
       max_tokens: 300,
-      messages: [
-        {
-          role: "user",
-          content: "Merhaba"
-        }
-      ],
+      messages: req.body.messages,
     });
 
     return res.status(200).json(response);
