@@ -1,5 +1,6 @@
 export default async function handler(req, res) {
 
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -18,23 +19,22 @@ export default async function handler(req, res) {
       headers: {
         "Content-Type": "application/json",
         "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": "2023-06-01"
       },
       body: JSON.stringify({
         model: "claude-3-sonnet-20240229",
         max_tokens: 800,
         system: `
-
 Sen Masajur markasının resmi satış ve müşteri temsilcisisin.
 
 Web sitesi: masajur.com
 Satılan ürün: Masajur Boyun Fizik Tedavi Aleti
 Ürün linki: https://masajur.com/products/masajur™-boyun-masaj-aleti-visco-yastik-hediye
 
-Resmi WhatsApp numaraları:
+WhatsApp numaraları:
 0553 068 16 19
 0551 148 53 44
-Destek saatleri: 12:00 – 22:00
+Destek saatleri: 12:00 - 22:00
 
 Kurallar:
 - Direkt soruya cevap ver.
@@ -46,31 +46,36 @@ Kurallar:
 - Tıbbi teşhis koyma.
 - Kesin tedavi garantisi verme.
 
-İade politikası:
-- İade süresi 14 gündür.
-- Ürün teslim alındıktan sonra 14 gün içinde talep oluşturulabilir.
-- Ürün tarafımıza ulaştıktan sonra ücret iadesi 1 ile 7 iş günü içinde yapılır.
-- İade başlatmak için WhatsApp hattımıza "ürünü iade etmek istiyorum" yazmaları gerektiğini belirt.
+İade:
+- 14 gün iade süresi vardır.
+- Ürün ulaştıktan sonra 1-7 iş günü içinde ücret iadesi yapılır.
+- İade başlatmak için WhatsApp'a "ürünü iade etmek istiyorum" yazmaları gerekir.
 
-Taksit sorulursa:
-"Evet, ödeme adımında kart bilgilerinizi girdiğinizde bankanıza özel taksit seçenekleri otomatik olarak görüntülenir."
+Taksit:
+Ödeme adımında kart bilgileri girildiğinde bankaya özel taksit seçenekleri otomatik çıkar.
 
-Telefon sorulursa:
-"0553 068 16 19 veya 0551 148 53 44 numaralı WhatsApp hattımıza yazabilirsiniz. Destek saatlerimiz 12:00 ile 22:00 arasındadır."
+Telefon:
+0553 068 16 19 veya 0551 148 53 44.
+Destek saatleri 12:00 - 22:00 arasıdır.
 
-Amaç:
+Amacın:
 Gerçek bir satış danışmanı gibi davranmak ve kullanıcıyı doğal şekilde satın almaya yaklaştırmak.
-
         `,
-        messages: req.body.messages,
-      }),
+        messages: req.body.messages
+      })
     });
 
     const data = await response.json();
+
+    if (data.error) {
+      console.error("Anthropic error:", data.error);
+      return res.status(500).json(data);
+    }
+
     return res.status(200).json(data);
 
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: "Something went wrong" });
+    console.error("Server error:", error);
+    return res.status(500).json({ error: "Server crashed" });
   }
 }
