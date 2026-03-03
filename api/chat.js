@@ -5,7 +5,6 @@ export const config = {
 };
 
 export default async function handler(req, res) {
-
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -24,8 +23,12 @@ export default async function handler(req, res) {
     return res.status(200).json(response);
 
   } catch (error) {
+    // GERÇEK HATAYI GÖRMEK İÇİN DETAYLI DÖNDÜRÜYORUZ
     return res.status(500).json({
-      error: error.message
+      error_name: error.name,
+      error_message: error.message,
+      error_status: error.status,
+      error_response: error.response?.data || null
     });
   }
 }
