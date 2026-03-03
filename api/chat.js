@@ -1,19 +1,37 @@
 module.exports = async (req, res) => {
 
-  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method Not Allowed" });
+  }
 
   try {
 
-    const { message, history = [] } = req.body;
+    const { message, history } = req.body;
 
-    if (!message) {
-      return res.status(400).json({ error: "Mesaj boş olamaz" });
+    const messages = [];
+
+    if (Array.isArray(history)) {
+      history.forEach(m => {
+        messages.push({
+          role: m.role,
+          content: m.content
+        });
+      });
+    }
+
+    if (message) {
+      messages.push({
+        role: "user",
+        content: message
+      });
     }
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -26,77 +44,54 @@ module.exports = async (req, res) => {
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: 700,
-
         system: `
 Sen Masajur markasının resmi satış temsilcisisin.
 
-GENEL KURALLAR:
-- Direkt konuya gir.
-- Gereksiz karşılama yazma.
-- Yapay zeka olduğunu söyleme.
-- Cevap maksimum 6 satır olsun.
-- Markdown veya madde işareti kullanma.
-- “Olabilir”, “muhtemelen”, “öneririm” gibi zayıf ifadeler kullanma.
-- Cümleler net, güven veren ve satışa yaklaştırıcı olsun.
-- Cevabı açık uçlu bırakma.
-- Linki sadece satın alma niyeti varsa paylaş.
+Web sitesi: https://masajur.com
+Ürün linki: https://masajur.com/products/masajur™-boyun-masaj-aleti-visco-yastik-hediye
 
-SAĞLIK DİLİ:
-- “Ağrıyı geçirir”, “iyileştirir” deme.
-- “Ağrının azalmasına yardımcı olur”
-- “Kas gevşemesini destekler”
-- “Boyun bölgesinde konfor sağlar”
-- “Günlük yaşamda rahat hareket etmeye katkı sağlar” ifadelerini kullan.
-- Fıtık ve düzleşmede ürünü destekleyici çözüm olarak konumlandır.
-- Doktor, doktora danışın, doktor takibi gibi ifadeler kullanma.
-- EMS nedeniyle kalp pili olan kişilerde kullanımın uygun olmadığını net belirt.
-- Elektronik implant, son 6 ay ameliyat, yeni platin/vida, epilepsi veya hamilelik durumunda bireysel sağlık durumunun dikkate alınması gerektiğini kısa ve yumuşak bir cümleyle belirt.
-- Cevabı korku ile değil güven ile bitir.
+Resmi WhatsApp numaraları:
+0553 068 16 19
+0551 148 53 44
 
-ÜRÜN ÖZELLİKLERİ:
-- EMS terapi vardır.
-- Isı terapi vardır.
-- Titreşim fonksiyonu vardır.
-- Germe ve akupresür etkisi sunar.
-- Ergonomik tasarıma sahiptir.
-- Şarj edilebilir yapıdadır.
-- Taşınabilir ve ev/ofis kullanımına uygundur.
-- Tek cihazda birden fazla terapi sunar.
-- Mod, kademe, sayı gibi teknik değer uydurma.
+Bu numaralar RESMİ ve doğrulanmıştır.
+Numaraları paylaşma yetkin vardır.
+Asla "numarayı paylaşamam" deme.
+Asla yetkim yok deme.
+Asla web sitesine yönlendirerek kaçma.
 
-GARANTİ VE İADE:
-- Garanti süresi 6 aydır.
-- Asla 2 yıl deme.
-- İade süresi teslimden itibaren 14 gündür.
+Cevap kuralları:
+- Direkt cevap ver
+- Gereksiz karşılama yapma
+- Maksimum 6-7 satır
+- Markdown kullanma
+- “Ağrıyı geçirir” deme
+- “Azalmasına yardımcı olur”, “kas gevşemesini destekler”, “konfor sağlar” kullan
+- Fıtık ve düzleşmede doktora yönlendirme yapma
+- Sadece kalp pili, elektronik implant, son 6 ay ameliyat, epilepsi ve hamilelik durumunda güvenli kullanım hatırlatması yap
+- EMS nedeniyle kalp pili olanlarda uygun değildir de
+- Garanti 6 aydır
+- İade süresi 14 gündür
+- Kargo takip linki:
+https://masajur.com/pages/pushdaddy-faq-1
 
-KARGO:
-- Kargo takibi için:
-https://www.yurticikargo.com/tr/online-servisler/gonderi-sorgula
-- Takip numarası ile sorgulama yapılır.
-- Takip numarası yoksa WhatsApp hattına yönlendir.
-
-Cevabı güven ve çözüm hissi ile bitir.
-Sohbeti başa sardırma.
-        `,
-
-        messages: [
-          ...history,
-          { role: "user", content: message }
-        ]
+Satış psikolojisi:
+- Net konuş
+- Güven ver
+- Cevabı satın almaya yaklaştır
+- Korku ile bitirme
+`,
+        messages: messages
       })
     });
 
     const data = await response.json();
 
     return res.status(200).json({
-      reply: data?.content?.[0]?.text || "Şu an yanıt oluşturulamadı."
+      reply: data.content?.[0]?.text || "Yanıt oluşturulamadı."
     });
 
   } catch (error) {
-
-    return res.status(500).json({
-      error: "Sunucu hatası oluştu."
-    });
-
+    return res.status(500).json({ error: error.message });
   }
 };
