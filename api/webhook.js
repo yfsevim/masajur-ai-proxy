@@ -1,4 +1,5 @@
 module.exports = async (req, res) => {
+console.log("WEBHOOK CALLED");
   const VERIFY_TOKEN = "masajur123";
 
   if (req.method === "GET") {
