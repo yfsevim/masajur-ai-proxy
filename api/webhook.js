@@ -1,4 +1,4 @@
-module.exports = (req, res) => {
+module.exports = async (req, res) => {
   const VERIFY_TOKEN = "masajur123";
 
   if (req.method === "GET") {
@@ -11,6 +11,11 @@ module.exports = (req, res) => {
     }
 
     return res.sendStatus(403);
+  }
+
+  if (req.method === "POST") {
+    console.log(JSON.stringify(req.body, null, 2));
+    return res.sendStatus(200);
   }
 
   return res.sendStatus(200);
