@@ -1,10 +1,10 @@
 // api/webhook.js
 // WhatsApp -> Shopify siparis + Yurtici kargo + Claude -> cevap
 // Hobby plan (10sn limit) icin: siparis & kargo PARALEL + her fetch'e timeout.
+// + Her mesaj Google Sheets'e kaydedilir (SHEETS_URL).
 
 const BASE = "https://masajur-ai-proxy.vercel.app";
 
-// --- yardimci: timeout'lu fetch ---
 async function fetchWithTimeout(url, options, ms) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
@@ -26,6 +26,24 @@ async function jsonFetch(url, body, ms) {
     ms
   );
   return await resp.json();
+}
+
+// Sohbeti Google Sheets'e yaz (hata olsa bile akisi bozma)
+async function logToSheets(phone, message, reply) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    await fetchWithTimeout(
+      process.env.SHEETS_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: phone, message: message, reply: reply })
+      },
+      4000
+    );
+  } catch (e) {
+    console.error("SHEETS LOG HATA:", e && e.message ? e.message : e);
+  }
 }
 
 module.exports = async (req, res) => {
@@ -77,7 +95,6 @@ module.exports = async (req, res) => {
       if (orderNumber) {
         console.log("SIPARIS SORGUSU:", orderNumber);
 
-        // Shopify ve Yurtici'yi AYNI ANDA baslat (paralel). Her birine 6sn timeout.
         const sipPromise = jsonFetch(BASE + "/api/siparis", { orderNumber }, 6000)
           .then((d) => { console.log("SIPARIS SONUCU:", JSON.stringify(d)); return d; })
           .catch((e) => { console.error("SIPARIS HATA:", e?.message || e); return null; });
@@ -88,7 +105,6 @@ module.exports = async (req, res) => {
 
         const [sip, kargo] = await Promise.all([sipPromise, kargoPromise]);
 
-        // Notu olustur (mantik orijinaliyle ayni)
         if ((sip && sip.found) || (kargo && kargo.found)) {
           orderNote =
             "[SİPARİŞ & KARGO BİLGİSİ - Aşağıdaki gerçek bilgileri kullanarak müşteriye doğal, sıcak ve net bir dille cevap ver. Asla bilgi uydurma, sadece bunları kullan. Kargo teslim edildiyse bunu olumlu söyle; yoldaysa nerede olduğunu ve güncel durumunu söyle.]\n";
@@ -160,6 +176,9 @@ module.exports = async (req, res) => {
 
       const whatsappData = await whatsappResponse.json();
       console.log("WHATSAPP SONUCU:", JSON.stringify(whatsappData));
+
+      // Sohbeti Sheets'e kaydet
+      await logToSheets(phone, message, reply);
 
       return res.status(200).send("OK");
     } catch (error) {
