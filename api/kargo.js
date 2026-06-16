@@ -1,5 +1,7 @@
 // api/kargo.js - Yurtici (eski TLS sunucu) icin https modulu + gevsek TLS ayari
-// Hobby plan icin: addHistoricalData=false (hizli) + timeout 8sn (kontrollu).
+// B yontemi: addHistoricalData=true (sube/sehir/tarih detayli) + 1 retry.
+// Eski SOAP servisinde ilk istek soguk/asili olabiliyor; timeout olursa
+// otomatik 1 kez daha denenir. Her deneme 7sn timeout (Hobby 10sn limiti icin).
 const https = require("https");
 
 const YK_HOST = "ws.yurticikargo.com";
@@ -7,6 +9,9 @@ const YK_PATH = "/KOPSWebServices/ShippingOrderDispatcherServices";
 const YK_USER = process.env.YK_USER;
 const YK_PASS = process.env.YK_PASS;
 const YK_LANG = "TR";
+
+const REQ_TIMEOUT_MS = 7000; // her deneme icin
+const MAX_TRIES = 2;         // ilk deneme + 1 retry
 
 function buildSoap(key) {
   return '<?xml version="1.0" encoding="UTF-8"?>' +
@@ -18,7 +23,7 @@ function buildSoap(key) {
     '<wsLanguage>' + YK_LANG + '</wsLanguage>' +
     '<keys>' + key + '</keys>' +
     '<keyType>0</keyType>' +
-    '<addHistoricalData>false</addHistoricalData>' +
+    '<addHistoricalData>true</addHistoricalData>' +
     '<onlyTracking>false</onlyTracking>' +
     '</ser:queryShipment>' +
     '</soapenv:Body></soapenv:Envelope>';
@@ -36,8 +41,8 @@ function fmtDate(d, t) {
   return day + "." + mon + "." + yr + time;
 }
 
-// https modulu ile, eski TLS + tum cipher'lara izin vererek POST
-function soapPost(body) {
+// https modulu ile, eski TLS + tum cipher'lara izin vererek POST (tek deneme)
+function soapPostOnce(body) {
   return new Promise(function (resolve, reject) {
     const options = {
       host: YK_HOST,
@@ -61,11 +66,27 @@ function soapPost(body) {
       resp.on("end", function () { resolve(data); });
     });
     req.on("error", function (e) { reject(e); });
-    // Hobby plan 10sn limitine yakalanmadan kontrollu hata don.
-    req.setTimeout(8000, function () { req.destroy(new Error("timeout")); });
+    req.setTimeout(REQ_TIMEOUT_MS, function () { req.destroy(new Error("timeout")); });
     req.write(body);
     req.end();
   });
+}
+
+// timeout olursa otomatik tekrar dener
+async function soapPost(body) {
+  let lastErr;
+  for (let i = 1; i <= MAX_TRIES; i++) {
+    try {
+      return await soapPostOnce(body);
+    } catch (e) {
+      lastErr = e;
+      console.error("KARGO DENEME " + i + " HATA:", e && e.message ? e.message : e);
+      // sadece timeout'ta tekrar dene; baska hatada bekleme
+      if (i < MAX_TRIES && e && e.message === "timeout") continue;
+      break;
+    }
+  }
+  throw lastErr;
 }
 
 function parseXml(xml, key) {
