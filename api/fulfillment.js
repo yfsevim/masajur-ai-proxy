@@ -49,8 +49,12 @@ module.exports = async (req, res) => {
       (order.name ? String(order.name).replace(/[^0-9]/g, "") : null) ||
       "";
 
+    const productName =
+      (order.line_items && order.line_items[0] && order.line_items[0].title) ||
+      "Ürün";
+
     const phone = normalizePhone(rawPhone);
-    console.log("FULFILLMENT GELDI:", JSON.stringify({ firstName, rawPhone, phone, orderNumber }));
+    console.log("FULFILLMENT GELDI:", JSON.stringify({ firstName, rawPhone, phone, orderNumber, productName }));
 
     if (!phone) {
       console.error("FULFILLMENT: telefon yok, mesaj gonderilemedi");
@@ -77,7 +81,8 @@ module.exports = async (req, res) => {
                 type: "body",
                 parameters: [
                   { type: "text", text: String(firstName) },
-                  { type: "text", text: String(orderNumber) }
+                  { type: "text", text: String(orderNumber) },
+                  { type: "text", text: String(productName) }
                 ]
               }
             ]
