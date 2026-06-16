@@ -19,8 +19,8 @@ function extractOrderNumber(order) {
   // ONCELIK: name (musteriye gosterilen numara, orn "#11742-F6" -> "11742").
   // order_number Shopify ic sirasi olabilir ve name'den farkli cikiyor; kullanmiyoruz.
   if (order.name) {
-    // "#11742-F6" -> ilk parca "#11742" -> "11742"
-    const firstPart = String(order.name).split(/[-_\s]/)[0];
+    // "#11742.7" veya "#11742-F7" -> ilk parca "#11742" -> "11742"
+    const firstPart = String(order.name).split(/[.\-_\s]/)[0];
     const digits = firstPart.replace(/[^0-9]/g, "");
     if (digits) return digits;
     // son care: name icindeki ilk ardisik rakam grubu
