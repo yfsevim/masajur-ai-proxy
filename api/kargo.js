@@ -1,6 +1,7 @@
 // api/kargo.js - Yurtici (eski TLS sunucu) icin https modulu + gevsek TLS ayari
-// Agresif retry: ilk istek soguk/asili gelirse hizlica kes, hemen yeniden dene.
-// Her deneme 3sn, en fazla 4 deneme. addHistoricalData=true (sube/sehir/tarih).
+// HIZ ONCELIKLI: addHistoricalData=false (hizli) + agresif retry.
+// Detay (sube/sehir/tarih) gelmez ama durum + takip linki hizli gelir,
+// timeout riski dusuktur. Musteri takip linkinden detayi canli gorur.
 const https = require("https");
 
 const YK_HOST = "ws.yurticikargo.com";
@@ -9,8 +10,8 @@ const YK_USER = process.env.YK_USER;
 const YK_PASS = process.env.YK_PASS;
 const YK_LANG = "TR";
 
-const REQ_TIMEOUT_MS = 3000; // her deneme kisa beklesin
-const MAX_TRIES = 4;         // soguk istekleri hizla atlayip yeniden dene
+const REQ_TIMEOUT_MS = 3500; // her deneme
+const MAX_TRIES = 3;
 
 function buildSoap(key) {
   return '<?xml version="1.0" encoding="UTF-8"?>' +
@@ -22,7 +23,7 @@ function buildSoap(key) {
     '<wsLanguage>' + YK_LANG + '</wsLanguage>' +
     '<keys>' + key + '</keys>' +
     '<keyType>0</keyType>' +
-    '<addHistoricalData>true</addHistoricalData>' +
+    '<addHistoricalData>false</addHistoricalData>' +
     '<onlyTracking>false</onlyTracking>' +
     '</ser:queryShipment>' +
     '</soapenv:Body></soapenv:Envelope>';
@@ -40,7 +41,6 @@ function fmtDate(d, t) {
   return day + "." + mon + "." + yr + time;
 }
 
-// Tek deneme
 function soapPostOnce(body) {
   return new Promise(function (resolve, reject) {
     const options = {
@@ -70,24 +70,19 @@ function soapPostOnce(body) {
   });
 }
 
-// Gecerli XML donene kadar dene. Timeout veya bos cevapta tekrar dener.
 async function soapPost(body) {
   let lastErr;
   for (let i = 1; i <= MAX_TRIES; i++) {
     try {
       const xml = await soapPostOnce(body);
-      // bazen baglanti aciliyor ama bos/yarim cevap donuyor; bunu da retry say
-      if (xml && xml.indexOf("queryShipment") !== -1 || (xml && xml.indexOf("operationMessage") !== -1)) {
-        return xml;
-      }
-      if (xml && xml.length > 50) return xml; // dolu bir cevapsa kabul et
-      console.error("KARGO DENEME " + i + ": bos/kisa cevap, tekrar deneniyor");
+      if (xml && xml.length > 50) return xml;
       lastErr = new Error("empty");
+      console.error("KARGO DENEME " + i + ": bos cevap");
       continue;
     } catch (e) {
       lastErr = e;
       console.error("KARGO DENEME " + i + " HATA:", e && e.message ? e.message : e);
-      continue; // timeout dahil her durumda kalan deneme varsa tekrar dene
+      continue;
     }
   }
   throw lastErr || new Error("timeout");
