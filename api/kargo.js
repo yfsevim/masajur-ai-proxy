@@ -1,4 +1,5 @@
 // api/kargo.js - Yurtici (eski TLS sunucu) icin https modulu + gevsek TLS ayari
+// Hobby plan icin: addHistoricalData=false (hizli) + timeout 8sn (kontrollu).
 const https = require("https");
 
 const YK_HOST = "ws.yurticikargo.com";
@@ -17,7 +18,7 @@ function buildSoap(key) {
     '<wsLanguage>' + YK_LANG + '</wsLanguage>' +
     '<keys>' + key + '</keys>' +
     '<keyType>0</keyType>' +
-    '<addHistoricalData>true</addHistoricalData>' +
+    '<addHistoricalData>false</addHistoricalData>' +
     '<onlyTracking>false</onlyTracking>' +
     '</ser:queryShipment>' +
     '</soapenv:Body></soapenv:Envelope>';
@@ -60,7 +61,8 @@ function soapPost(body) {
       resp.on("end", function () { resolve(data); });
     });
     req.on("error", function (e) { reject(e); });
-    req.setTimeout(20000, function () { req.destroy(new Error("timeout")); });
+    // Hobby plan 10sn limitine yakalanmadan kontrollu hata don.
+    req.setTimeout(8000, function () { req.destroy(new Error("timeout")); });
     req.write(body);
     req.end();
   });
