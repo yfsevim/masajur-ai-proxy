@@ -32,6 +32,7 @@ module.exports = async (req, res) => {
 
   try {
     const order = req.body || {};
+    console.log("FULFILLMENT RAW BODY:", JSON.stringify(order).substring(0, 2000));
 
     const firstName =
       (order.customer && order.customer.first_name) ||
