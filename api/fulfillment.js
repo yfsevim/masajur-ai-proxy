@@ -1,6 +1,6 @@
 // api/fulfillment.js
 const SECRET = "masajur_yakkoholding_2128";
-const TEMPLATE_NAME = "kargo_verildi";
+const TEMPLATE_NAME = "kargo_verildi_v3";
 const TEMPLATE_LANG = "tr";
 
 function normalizePhone(raw) {
