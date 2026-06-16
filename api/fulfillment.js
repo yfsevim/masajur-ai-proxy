@@ -1,14 +1,8 @@
 // api/fulfillment.js
-// Shopify siparis kargoya verilince (fulfillment webhook) tetiklenir,
-// musteriye WhatsApp 'kargo_verildi' sablonunu gonderir.
-//
-// Guvenlik: URL'de ?secret=... ile gizli anahtar kontrol edilir.
-// Sablon: kargo_verildi (Turkish) -> {{1}} musteri adi, {{2}} siparis no
 const SECRET = "masajur_yakkoholding_2128";
 const TEMPLATE_NAME = "kargo_verildi";
 const TEMPLATE_LANG = "tr";
 
-// 90'li / 0'li / +90'li gelen numarayi WhatsApp formatina (90XXXXXXXXXX) cevir
 function normalizePhone(raw) {
   if (!raw) return null;
   let p = String(raw).replace(/[^0-9]/g, "");
@@ -32,16 +26,16 @@ module.exports = async (req, res) => {
 
   try {
     const order = req.body || {};
-    console.log("FULFILLMENT RAW BODY:", JSON.stringify(order).substring(0, 2000));
 
     const firstName =
+      (order.destination && order.destination.first_name) ||
       (order.customer && order.customer.first_name) ||
       (order.billing_address && order.billing_address.first_name) ||
       (order.shipping_address && order.shipping_address.first_name) ||
       "Merhaba";
 
-    // Telefon: shipping -> billing -> customer -> note_attributes sirayla
     const rawPhone =
+      (order.destination && order.destination.phone) ||
       (order.shipping_address && order.shipping_address.phone) ||
       (order.billing_address && order.billing_address.phone) ||
       (order.customer && order.customer.phone) ||
