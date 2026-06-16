@@ -92,8 +92,8 @@ module.exports = async (req, res) => {
                 type: "body",
                 parameters: [
                   { type: "text", text: String(firstName) },
-                  { type: "text", text: String(orderNumber) },
-                  { type: "text", text: String(productName) }
+                  { type: "text", text: String(productName) },
+                  { type: "text", text: String(orderNumber) }
                 ]
               }
             ]
