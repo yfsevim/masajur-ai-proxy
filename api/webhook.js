@@ -1,3 +1,33 @@
+// api/webhook.js
+// WhatsApp -> Shopify siparis + Yurtici kargo + Claude -> cevap
+// Hobby plan (10sn limit) icin: siparis & kargo PARALEL + her fetch'e timeout.
+
+const BASE = "https://masajur-ai-proxy.vercel.app";
+
+// --- yardimci: timeout'lu fetch ---
+async function fetchWithTimeout(url, options, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function jsonFetch(url, body, ms) {
+  const resp = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    },
+    ms
+  );
+  return await resp.json();
+}
+
 module.exports = async (req, res) => {
   const VERIFY_TOKEN = "masajur123";
 
@@ -15,12 +45,9 @@ module.exports = async (req, res) => {
     console.log("MESAJ GELDI");
 
     try {
-      const value =
-        req.body?.entry?.[0]?.changes?.[0]?.value;
-      const message =
-        value?.messages?.[0]?.text?.body;
-      const phone =
-        value?.messages?.[0]?.from;
+      const value = req.body?.entry?.[0]?.changes?.[0]?.value;
+      const message = value?.messages?.[0]?.text?.body;
+      const phone = value?.messages?.[0]?.from;
 
       console.log("MESAJ:", message);
       console.log("TELEFON:", phone);
@@ -31,7 +58,7 @@ module.exports = async (req, res) => {
       }
 
       // ---------------------------------------------------------
-      // SIPARIS + KARGO SORGUSU (A yöntemi)
+      // SIPARIS + KARGO SORGUSU
       // ---------------------------------------------------------
       let orderNote = "";
 
@@ -45,48 +72,23 @@ module.exports = async (req, res) => {
 
       const hashMatch = message.match(/#\s*(\d{3,})/);
       const numMatch = message.match(/\b(\d{3,})\b/);
-      const orderNumber = hashMatch
-        ? hashMatch[1]
-        : (numMatch ? numMatch[1] : null);
+      const orderNumber = hashMatch ? hashMatch[1] : (numMatch ? numMatch[1] : null);
 
       if (orderNumber) {
         console.log("SIPARIS SORGUSU:", orderNumber);
 
-        // 1) Shopify'dan siparisi cek
-        let sip = null;
-        try {
-          const sipResp = await fetch(
-            "https://masajur-ai-proxy.vercel.app/api/siparis",
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ orderNumber })
-            }
-          );
-          sip = await sipResp.json();
-          console.log("SIPARIS SONUCU:", JSON.stringify(sip));
-        } catch (e) {
-          console.error("SIPARIS FETCH HATA:", e?.message || e);
-        }
+        // Shopify ve Yurtici'yi AYNI ANDA baslat (paralel). Her birine 6sn timeout.
+        const sipPromise = jsonFetch(BASE + "/api/siparis", { orderNumber }, 6000)
+          .then((d) => { console.log("SIPARIS SONUCU:", JSON.stringify(d)); return d; })
+          .catch((e) => { console.error("SIPARIS HATA:", e?.message || e); return null; });
 
-        // 2) Yurtici'den canli kargo durumunu cek (siparis no ile)
-        let kargo = null;
-        try {
-          const kargoResp = await fetch(
-            "https://masajur-ai-proxy.vercel.app/api/kargo",
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ orderNumber })
-            }
-          );
-          kargo = await kargoResp.json();
-          console.log("KARGO SONUCU:", JSON.stringify(kargo));
-        } catch (e) {
-          console.error("KARGO FETCH HATA:", e?.message || e);
-        }
+        const kargoPromise = jsonFetch(BASE + "/api/kargo", { orderNumber }, 6000)
+          .then((d) => { console.log("KARGO SONUCU:", JSON.stringify(d)); return d; })
+          .catch((e) => { console.error("KARGO HATA:", e?.message || e); return null; });
 
-        // 3) Notu olustur
+        const [sip, kargo] = await Promise.all([sipPromise, kargoPromise]);
+
+        // Notu olustur (mantik orijinaliyle ayni)
         if ((sip && sip.found) || (kargo && kargo.found)) {
           orderNote =
             "[SİPARİŞ & KARGO BİLGİSİ - Aşağıdaki gerçek bilgileri kullanarak müşteriye doğal, sıcak ve net bir dille cevap ver. Asla bilgi uydurma, sadece bunları kullan. Kargo teslim edildiyse bunu olumlu söyle; yoldaysa nerede olduğunu ve güncel durumunu söyle.]\n";
@@ -128,17 +130,15 @@ module.exports = async (req, res) => {
         ? orderNote + "\n\nMüşteri mesajı: " + message
         : message;
 
-      const claudeResponse = await fetch(
-        "https://masajur-ai-proxy.vercel.app/api/chat",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: claudeMessage })
-        }
-      );
+      let reply = "Yanıt oluşturulamadı.";
+      try {
+        const claudeData = await jsonFetch(BASE + "/api/chat", { message: claudeMessage }, 9000);
+        reply = claudeData.reply || reply;
+      } catch (e) {
+        console.error("CLAUDE HATA:", e?.message || e);
+        reply = "Şu an yoğunluk var, birkaç dakika sonra tekrar yazar mısın? Acil ise 0553 068 16 19'dan ulaşabilirsin.";
+      }
 
-      const claudeData = await claudeResponse.json();
-      const reply = claudeData.reply || "Yanıt oluşturulamadı.";
       console.log("WHATSAPP'A GONDERILIYOR:", reply);
 
       const whatsappResponse = await fetch(
