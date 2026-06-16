@@ -2,8 +2,24 @@
 // WhatsApp -> Shopify siparis + Yurtici kargo + Claude -> cevap
 // Hobby plan (10sn limit) icin: siparis & kargo PARALEL + her fetch'e timeout.
 // + Her mesaj Google Sheets'e kaydedilir (SHEETS_URL).
+// + Riskli kelimelerde yetkililere 'temsilci_bildirim' sablonu gonderilir.
 
 const BASE = "https://masajur-ai-proxy.vercel.app";
+
+// Sorun/sikayet sinyali veren kelimeler (kucuk harf, Turkce karakterli):
+const ALERT_KEYWORDS = [
+  "şikayet", "sikayet", "şikayetçi", "sikayetci", "şikayetçiyim", "sikayetciyim",
+  "memnun değil", "memnun degil", "memnun kalmadım", "memnun kalmadim",
+  "dolandırıcı", "dolandirici", "dolandırıldım", "dolandirildim",
+  "avukat", "bozuk", "çalışmıyor", "calismiyor", "kırık", "kirik",
+  "arızalı", "arizali", "para iadesi", "rezalet"
+];
+
+// Bildirim gidecek yetkili numaralar (90 formatinda):
+const ALERT_NUMBERS = ["905530681619", "905511485344"];
+
+const ALERT_TEMPLATE = "temsilci_bildirim";
+const ALERT_TEMPLATE_LANG = "tr";
 
 async function fetchWithTimeout(url, options, ms) {
   const controller = new AbortController();
@@ -44,6 +60,51 @@ async function logToSheets(phone, message, reply) {
   } catch (e) {
     console.error("SHEETS LOG HATA:", e && e.message ? e.message : e);
   }
+}
+
+// Tek bir yetkiliye temsilci_bildirim sablonu gonder
+async function sendAlertTo(toNumber, customerPhone, customerMessage) {
+  try {
+    const resp = await fetchWithTimeout(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: toNumber,
+          type: "template",
+          template: {
+            name: ALERT_TEMPLATE,
+            language: { code: ALERT_TEMPLATE_LANG },
+            components: [
+              {
+                type: "body",
+                parameters: [
+                  { type: "text", text: String(customerPhone) },
+                  { type: "text", text: String(customerMessage).slice(0, 250) }
+                ]
+              }
+            ]
+          }
+        })
+      },
+      6000
+    );
+    const data = await resp.json();
+    console.log("ALERT SONUCU (" + toNumber + "):", JSON.stringify(data));
+  } catch (e) {
+    console.error("ALERT HATA (" + toNumber + "):", e && e.message ? e.message : e);
+  }
+}
+
+// Mesajda riskli kelime var mi?
+function needsAlert(message) {
+  const lower = String(message).toLowerCase();
+  return ALERT_KEYWORDS.some(function (k) { return lower.includes(k); });
 }
 
 module.exports = async (req, res) => {
@@ -179,6 +240,14 @@ module.exports = async (req, res) => {
 
       // Sohbeti Sheets'e kaydet
       await logToSheets(phone, message, reply);
+
+      // Riskli kelime varsa yetkililere bildir
+      if (needsAlert(message)) {
+        console.log("ALERT TETIKLENDI");
+        for (const num of ALERT_NUMBERS) {
+          await sendAlertTo(num, phone, message);
+        }
+      }
 
       return res.status(200).send("OK");
     } catch (error) {
