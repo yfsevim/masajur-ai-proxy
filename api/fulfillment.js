@@ -3,6 +3,34 @@ const SECRET = "masajur_yakkoholding_2128";
 const TEMPLATE_NAME = "kargo_verildi_v3";
 const TEMPLATE_LANG = "tr";
 
+// Kargo bildirimini Google Sheets'e yaz (type:kargo -> "Kargo Bildirimleri" sekmesi)
+async function logKargoToSheets(phone, name, orderNumber, product, status) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    try {
+      await fetch(process.env.SHEETS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "kargo",
+          phone: phone,
+          name: name,
+          orderNumber: orderNumber,
+          product: product,
+          status: status
+        }),
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (e) {
+    console.error("KARGO SHEETS LOG HATA:", e && e.message ? e.message : e);
+  }
+}
+
 function normalizePhone(raw) {
   if (!raw) return null;
   let p = String(raw).replace(/[^0-9]/g, "");
@@ -103,6 +131,10 @@ module.exports = async (req, res) => {
     );
     const waData = await waResp.json();
     console.log("FULFILLMENT WHATSAPP SONUCU:", JSON.stringify(waData));
+
+    // Kargo bildirimini Sheets'e kaydet
+    await logKargoToSheets(phone, firstName, orderNumber, productName, "Kargoya verildi");
+
     return res.status(200).send("OK");
   } catch (error) {
     console.error("FULFILLMENT HATA:", error && error.message ? error.message : error);
