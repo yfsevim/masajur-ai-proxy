@@ -1,16 +1,16 @@
-// api/kargo.js - Yurtici (eski TLS sunucu) icin https modulu + gevsek TLS ayari
-// HIZ ONCELIKLI: addHistoricalData=false (hizli) + agresif retry.
-// Detay (sube/sehir/tarih) gelmez ama durum + takip linki hizli gelir,
-// timeout riski dusuktur. Musteri takip linkinden detayi canli gorur.
-const https = require("https");
+// api/kargo.js - DENEME: webservices.yurticikargo.com:8080 (HTTP) endpoint
+// Eski ws.yurticikargo.com (HTTPS) yerine 8080 HTTP sunucusu deneniyor.
+// HTTP oldugu icin http modulu + TLS ayari yok. Agresif retry korundu.
+const http = require("http");
 
-const YK_HOST = "ws.yurticikargo.com";
+const YK_HOST = "webservices.yurticikargo.com";
+const YK_PORT = 8080;
 const YK_PATH = "/KOPSWebServices/ShippingOrderDispatcherServices";
 const YK_USER = process.env.YK_USER;
 const YK_PASS = process.env.YK_PASS;
 const YK_LANG = "TR";
 
-const REQ_TIMEOUT_MS = 3500; // her deneme
+const REQ_TIMEOUT_MS = 4000;
 const MAX_TRIES = 3;
 
 function buildSoap(key) {
@@ -23,7 +23,7 @@ function buildSoap(key) {
     '<wsLanguage>' + YK_LANG + '</wsLanguage>' +
     '<keys>' + key + '</keys>' +
     '<keyType>0</keyType>' +
-    '<addHistoricalData>false</addHistoricalData>' +
+    '<addHistoricalData>true</addHistoricalData>' +
     '<onlyTracking>false</onlyTracking>' +
     '</ser:queryShipment>' +
     '</soapenv:Body></soapenv:Envelope>';
@@ -45,19 +45,16 @@ function soapPostOnce(body) {
   return new Promise(function (resolve, reject) {
     const options = {
       host: YK_HOST,
-      port: 443,
+      port: YK_PORT,
       path: YK_PATH,
       method: "POST",
       headers: {
         "Content-Type": "text/xml; charset=utf-8",
         "SOAPAction": "",
         "Content-Length": Buffer.byteLength(body)
-      },
-      rejectUnauthorized: false,
-      minVersion: "TLSv1",
-      ciphers: "DEFAULT:@SECLEVEL=0"
+      }
     };
-    const req = https.request(options, function (resp) {
+    const req = http.request(options, function (resp) {
       let data = "";
       resp.setEncoding("utf8");
       resp.on("data", function (c) { data += c; });
