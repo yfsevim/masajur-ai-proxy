@@ -3,6 +3,31 @@ const SECRET = "masajur_yakkoholding_2128";
 const TEMPLATE_NAME = "kargo_verildi_v3";
 const TEMPLATE_LANG = "tr";
 
+// 3 gun sonra yorum kontrolu icin QStash'e gorev birak
+async function scheduleYorum(orderNumber, phone, name) {
+  try {
+    if (!process.env.QSTASH_TOKEN) {
+      console.log("QSTASH_TOKEN yok, yorum gorevi birakilamadi");
+      return;
+    }
+    // QStash, hedef URL'i Upstash-Delay kadar sonra cagirir.
+    const targetUrl = "https://masajur-ai-proxy.vercel.app/api/yorum?secret=" + SECRET;
+    const resp = await fetch("https://qstash.upstash.io/v2/publish/" + targetUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + process.env.QSTASH_TOKEN,
+        "Content-Type": "application/json",
+        "Upstash-Delay": "3d"
+      },
+      body: JSON.stringify({ orderNumber: orderNumber, phone: phone, name: name })
+    });
+    const data = await resp.json();
+    console.log("QSTASH YORUM GOREVI:", JSON.stringify(data));
+  } catch (e) {
+    console.error("QSTASH YORUM GOREVI HATA:", e && e.message ? e.message : e);
+  }
+}
+
 // Kargo bildirimini Google Sheets'e yaz (type:kargo -> "Kargo Bildirimleri" sekmesi)
 async function logKargoToSheets(phone, name, orderNumber, product, status) {
   try {
@@ -134,6 +159,9 @@ module.exports = async (req, res) => {
 
     // Kargo bildirimini Sheets'e kaydet
     await logKargoToSheets(phone, firstName, orderNumber, productName, "Kargoya verildi");
+
+    // 3 gun sonra yorum kontrolu icin QStash'e gorev birak
+    await scheduleYorum(orderNumber, phone, firstName);
 
     return res.status(200).send("OK");
   } catch (error) {
