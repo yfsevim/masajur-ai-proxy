@@ -33,7 +33,7 @@ async function logKargoToSheets(phone, name, orderNumber, product, status) {
   try {
     if (!process.env.SHEETS_URL) return;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4000);
+    const timer = setTimeout(() => controller.abort(), 8000);
     try {
       await fetch(process.env.SHEETS_URL, {
         method: "POST",
