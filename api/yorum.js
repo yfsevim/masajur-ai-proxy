@@ -18,6 +18,30 @@ async function fetchWithTimeout(url, options, ms) {
   }
 }
 
+// Yorum mesaji kaydini Google Sheets'e yaz (type:yorum -> "Yorum Mesajları" sekmesi)
+async function logYorumToSheets(phone, name, orderNumber, status) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    await fetchWithTimeout(
+      process.env.SHEETS_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "yorum",
+          phone: phone,
+          name: name,
+          orderNumber: orderNumber,
+          status: status
+        })
+      },
+      8000
+    );
+  } catch (e) {
+    console.error("YORUM SHEETS LOG HATA:", e && e.message ? e.message : e);
+  }
+}
+
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
     return res.status(200).send("OK");
@@ -65,9 +89,8 @@ module.exports = async (req, res) => {
     // 2) Teslim edildi mi? SADECE DLV ise mesaj at.
     if (!kargo || !kargo.found || kargo.statusCode !== "DLV") {
       console.log("YORUM: teslim edilmemis veya kontrol edilemedi, mesaj ATILMADI. statusCode=" + (kargo && kargo.statusCode));
-      // 200 donuyoruz ki QStash bunu basarili saysin ve tekrar denemesin.
-      // (Timeout durumunda tekrar denemek istersek burada 500 donup QStash retry'a birakabiliriz;
-      //  ama yanlis zamanda mesaj atmamak icin guvenli taraf: atlamak.)
+      var atlandiDurum = (kargo && kargo.statusCode) ? ("Atlandi - " + kargo.statusCode) : "Atlandi - kontrol edilemedi";
+      await logYorumToSheets(phone, name, orderNumber, atlandiDurum);
       return res.status(200).send("OK - not delivered");
     }
 
@@ -102,6 +125,9 @@ module.exports = async (req, res) => {
     );
     const waData = await waResp.json();
     console.log("YORUM WHATSAPP SONUCU:", JSON.stringify(waData));
+
+    // Yorum mesaji kaydini Sheets'e yaz
+    await logYorumToSheets(phone, name, orderNumber, "Yorum mesaji gonderildi");
 
     return res.status(200).send("OK - sent");
   } catch (error) {
