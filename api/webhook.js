@@ -62,6 +62,8 @@ async function logToSheets(phone, message, reply) {
   }
 }
 
+// NOT: Sheets log timeout webhook'un toplam suresini etkilemesin diye dusuk tutuldu.
+
 // Tek bir yetkiliye temsilci_bildirim sablonu gonder
 async function sendAlertTo(toNumber, customerPhone, customerMessage) {
   try {
@@ -213,7 +215,7 @@ module.exports = async (req, res) => {
         reply = claudeData.reply || reply;
       } catch (e) {
         console.error("CLAUDE HATA:", e?.message || e);
-        reply = "Şu an yoğunluk var, birkaç dakika sonra tekrar yazar mısın? Acil ise 0553 068 16 19'dan ulaşabilirsin.";
+        reply = "Şu an kısa bir yoğunluk yaşıyoruz, birkaç dakika sonra tekrar yazabilir misiniz? Acil ise 0553 068 16 19 veya 0551 148 53 44 numaralarından bize ulaşabilirsiniz 🙂";
       }
 
       console.log("WHATSAPP'A GONDERILIYOR:", reply);
