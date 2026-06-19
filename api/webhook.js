@@ -3,8 +3,35 @@
 // Hobby plan (10sn limit) icin: siparis & kargo PARALEL + her fetch'e timeout.
 // + Her mesaj Google Sheets'e kaydedilir (SHEETS_URL).
 // + Riskli kelimelerde yetkililere 'temsilci_bildirim' sablonu gonderilir.
+// + Konusma hafizasi (Upstash Redis): son mesajlar hatirlanir.
 
 const BASE = "https://masajur-ai-proxy.vercel.app";
+
+// --- Konusma hafizasi (Upstash Redis) ---
+const { Redis } = require("@upstash/redis");
+const redis = Redis.fromEnv();
+const HISTORY_MAX = 20;          // tutulacak son mesaj sayisi (user+assistant)
+const HISTORY_TTL = 172800;      // 2 gun (saniye)
+
+async function getHistory(phone) {
+  try {
+    const h = await redis.get("chat:" + phone);
+    return Array.isArray(h) ? h : [];
+  } catch (e) {
+    console.error("HAFIZA OKUMA HATA:", e && e.message ? e.message : e);
+    return [];
+  }
+}
+
+async function saveHistory(phone, history) {
+  try {
+    const trimmed = history.slice(-HISTORY_MAX);
+    await redis.set("chat:" + phone, trimmed, { ex: HISTORY_TTL });
+  } catch (e) {
+    console.error("HAFIZA YAZMA HATA:", e && e.message ? e.message : e);
+  }
+}
+// -----------------------------------------
 
 // Sorun/sikayet sinyali veren kelimeler (kucuk harf, Turkce karakterli):
 const ALERT_KEYWORDS = [
@@ -138,6 +165,10 @@ module.exports = async (req, res) => {
         return res.status(200).send("OK");
       }
 
+      // Bu musterinin gecmis konusmasini Redis'ten cek
+      const history = await getHistory(phone);
+      console.log("HAFIZA UZUNLUGU:", history.length);
+
       // ---------------------------------------------------------
       // SIPARIS + KARGO SORGUSU
       // ---------------------------------------------------------
@@ -211,7 +242,12 @@ module.exports = async (req, res) => {
 
       let reply = "Yanıt oluşturulamadı.";
       try {
-        const claudeData = await jsonFetch(BASE + "/api/chat", { message: claudeMessage }, 9000);
+        // Gecmis konusmayi da gonder ki bot baglami anlasin
+        const claudeData = await jsonFetch(
+          BASE + "/api/chat",
+          { message: claudeMessage, history: history },
+          9000
+        );
         reply = claudeData.reply || reply;
       } catch (e) {
         console.error("CLAUDE HATA:", e?.message || e);
@@ -239,6 +275,11 @@ module.exports = async (req, res) => {
 
       const whatsappData = await whatsappResponse.json();
       console.log("WHATSAPP SONUCU:", JSON.stringify(whatsappData));
+
+      // Bu turu hafizaya ekle (ham musteri mesaji + botun cevabi)
+      history.push({ role: "user", content: message });
+      history.push({ role: "assistant", content: reply });
+      await saveHistory(phone, history);
 
       // Sohbeti Sheets'e kaydet
       await logToSheets(phone, message, reply);
