@@ -1,9 +1,7 @@
 // api/yorum.js
-// QStash tarafindan (kargodan ~3 gun sonra) tetiklenir.
-// Siparisi Yurtici'den kontrol eder; SADECE teslim edildiyse (DLV) yorum mesaji atar.
-// Teslim edilmedi / iade / donen / timeout -> mesaj ATMAZ.
+// QStash tarafindan (kargodan ~4 gun sonra) tetiklenir.
+// TESLIM KONTROLU YOK: gelen her siparise yorum mesaji gonderir.
 
-const BASE = "https://masajur-ai-proxy.vercel.app";
 const SECRET = "masajur_yakkoholding_2128";
 const TEMPLATE_NAME = "yorum_istek";
 const TEMPLATE_LANG = "tr";
@@ -15,6 +13,23 @@ async function fetchWithTimeout(url, options, ms) {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// WhatsApp API cevabindan gercek gonderim durumunu cikar
+function readWaStatus(waData) {
+  try {
+    if (waData && waData.messages && waData.messages[0] && waData.messages[0].id) {
+      return "Gonderildi OK (" + waData.messages[0].id + ")";
+    }
+    if (waData && waData.error) {
+      const code = waData.error.code != null ? " [" + waData.error.code + "]" : "";
+      const msg = waData.error.message || "bilinmeyen hata";
+      return "GITMEDI HATA" + code + ": " + msg;
+    }
+    return "BELIRSIZ: " + JSON.stringify(waData).slice(0, 150);
+  } catch (e) {
+    return "DURUM OKUNAMADI: " + (e && e.message ? e.message : e);
   }
 }
 
@@ -63,38 +78,13 @@ module.exports = async (req, res) => {
 
     console.log("YORUM TETIKLENDI:", JSON.stringify({ orderNumber, phone, name }));
 
-    if (!orderNumber || !phone) {
-      console.error("YORUM: orderNumber veya phone yok");
+    if (!phone) {
+      console.error("YORUM: phone yok, mesaj gonderilemedi");
+      await logYorumToSheets("", name, orderNumber, "GITMEDI: telefon yok");
       return res.status(200).send("OK");
     }
 
-    // 1) Yurtici'den kargo durumunu sor
-    let kargo = null;
-    try {
-      const kargoResp = await fetchWithTimeout(
-        BASE + "/api/kargo",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ orderNumber })
-        },
-        9000
-      );
-      kargo = await kargoResp.json();
-      console.log("YORUM KARGO SONUCU:", JSON.stringify(kargo));
-    } catch (e) {
-      console.error("YORUM KARGO HATA:", e && e.message ? e.message : e);
-    }
-
-    // 2) Teslim edildi mi? SADECE DLV ise mesaj at.
-    if (!kargo || !kargo.found || kargo.statusCode !== "DLV") {
-      console.log("YORUM: teslim edilmemis veya kontrol edilemedi, mesaj ATILMADI. statusCode=" + (kargo && kargo.statusCode));
-      var atlandiDurum = (kargo && kargo.statusCode) ? ("Atlandi - " + kargo.statusCode) : "Atlandi - kontrol edilemedi";
-      await logYorumToSheets(phone, name, orderNumber, atlandiDurum);
-      return res.status(200).send("OK - not delivered");
-    }
-
-    // 3) Teslim edilmis -> yorum mesaji gonder
+    // TESLIM KONTROLU YOK -> direkt yorum mesaji gonder
     const waResp = await fetchWithTimeout(
       `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
       {
@@ -126,8 +116,9 @@ module.exports = async (req, res) => {
     const waData = await waResp.json();
     console.log("YORUM WHATSAPP SONUCU:", JSON.stringify(waData));
 
-    // Yorum mesaji kaydini Sheets'e yaz
-    await logYorumToSheets(phone, name, orderNumber, "Yorum mesaji gonderildi");
+    // Gercek gonderim durumunu Sheets'e yaz
+    const waStatus = readWaStatus(waData);
+    await logYorumToSheets(phone, name, orderNumber, waStatus);
 
     return res.status(200).send("OK - sent");
   } catch (error) {
