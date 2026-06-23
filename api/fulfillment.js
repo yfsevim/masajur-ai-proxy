@@ -56,6 +56,24 @@ async function logKargoToSheets(phone, name, orderNumber, product, status) {
   }
 }
 
+// WhatsApp API cevabindan gercek gonderim durumunu cikar.
+// Basari -> mesaj id'si doner. Hata -> error objesi doner.
+function readWaStatus(waData) {
+  try {
+    if (waData && waData.messages && waData.messages[0] && waData.messages[0].id) {
+      return "Gonderildi OK (" + waData.messages[0].id + ")";
+    }
+    if (waData && waData.error) {
+      const code = waData.error.code != null ? " [" + waData.error.code + "]" : "";
+      const msg = waData.error.message || "bilinmeyen hata";
+      return "GITMEDI HATA" + code + ": " + msg;
+    }
+    return "BELIRSIZ: " + JSON.stringify(waData).slice(0, 150);
+  } catch (e) {
+    return "DURUM OKUNAMADI: " + (e && e.message ? e.message : e);
+  }
+}
+
 function normalizePhone(raw) {
   if (!raw) return null;
   let p = String(raw).replace(/[^0-9]/g, "");
@@ -123,6 +141,8 @@ module.exports = async (req, res) => {
     console.log("FULFILLMENT GELDI:", JSON.stringify({ firstName, rawPhone, phone, orderName: order.name, orderNumber, productName }));
     if (!phone) {
       console.error("FULFILLMENT: telefon yok, mesaj gonderilemedi");
+      // Telefon yoksa bile Sheets'e neden gonderilemedigini yaz
+      await logKargoToSheets("", firstName, orderNumber, productName, "GITMEDI: telefon numarasi yok");
       return res.status(200).send("OK");
     }
     const waResp = await fetch(
@@ -157,8 +177,12 @@ module.exports = async (req, res) => {
     const waData = await waResp.json();
     console.log("FULFILLMENT WHATSAPP SONUCU:", JSON.stringify(waData));
 
-    // Kargo bildirimini Sheets'e kaydet
-    await logKargoToSheets(phone, firstName, orderNumber, productName, "Kargoya verildi");
+    // WhatsApp'in gercek cevabindan gonderim durumunu cikar
+    const waStatus = readWaStatus(waData);
+    console.log("FULFILLMENT WA DURUM:", waStatus);
+
+    // Kargo bildirimini Sheets'e GERCEK gonderim durumuyla kaydet
+    await logKargoToSheets(phone, firstName, orderNumber, productName, waStatus);
 
     // 3 gun sonra yorum kontrolu icin QStash'e gorev birak
     await scheduleYorum(orderNumber, phone, firstName);
