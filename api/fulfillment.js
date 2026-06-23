@@ -17,7 +17,7 @@ async function scheduleYorum(orderNumber, phone, name) {
       headers: {
         "Authorization": "Bearer " + process.env.QSTASH_TOKEN,
         "Content-Type": "application/json",
-        "Upstash-Delay": "3d"
+        "Upstash-Delay": "4d"
       },
       body: JSON.stringify({ orderNumber: orderNumber, phone: phone, name: name })
     });
