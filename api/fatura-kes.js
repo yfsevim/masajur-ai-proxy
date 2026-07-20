@@ -26,9 +26,6 @@ const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
 const API_VERSION = "2026-04";
 const INVOICED_TAG = "fatura-kesildi";
 
-// ---- VKN/TCKN'in checkout formunda hangi alanda geldigini burada TANIMLA ----
-// EasySell COD Form'da bu bilgiyi hangi custom field/note_attribute adiyla
-// topluyorsan asagidaki listeye ekle. Birden fazla olasi isim deneniyor.
 const VKN_TCKN_ATTRIBUTE_NAMES = [
   "Vergi No", "VKN", "TC Kimlik No", "TCKN", "Vergi Kimlik No", "Kimlik No"
 ];
@@ -54,7 +51,6 @@ async function fetchWithTimeout(url, options, ms) {
   }
 }
 
-// Siparisi Shopify'dan tam detayiyla cek (fatura icin gereken tum alanlar)
 async function getShopifyOrder(orderNumber) {
   const clean = String(orderNumber).replace(/[^0-9]/g, "");
   const fields = "id,name,email,phone,financial_status,fulfillment_status,cancelled_at," +
@@ -77,10 +73,9 @@ async function getShopifyOrder(orderNumber) {
   return order;
 }
 
-// Siparise "fatura-kesildi" etiketi ekle (tekrar fatura kesilmesini onlemek icin)
 async function tagOrderAsInvoiced(order) {
   const existingTags = order.tags ? order.tags.split(",").map(t => t.trim()).filter(Boolean) : [];
-  if (existingTags.includes(INVOICED_TAG)) return; // zaten isaretli
+  if (existingTags.includes(INVOICED_TAG)) return;
   existingTags.push(INVOICED_TAG);
   const url = `https://${SHOPIFY_STORE}/admin/api/${API_VERSION}/orders/${order.id}.json`;
   await fetchWithTimeout(url, {
@@ -169,26 +164,41 @@ async function mysoftFaturaOlustur(payload) {
   const kdvDahilSatirlarHam = (payload.urunler || []).map(u => {
     const qty = Number(u.miktar) || 0;
     const vatRate = Number(u.kdvOrani) || VARSAYILAN_KDV_ORANI;
-    const kdvDahilBirimFiyat = Number(u.birimFiyat) || 0;   // Shopify'daki fiyat (KDV dahil)
+    const kdvDahilBirimFiyat = Number(u.birimFiyat) || 0;
     const kdvDahilSatirToplam = Math.round(qty * kdvDahilBirimFiyat * 100) / 100;
     return { ad: u.ad, qty, vatRate, kdvDahilSatirToplam };
   });
   const toplamKdvDahilUrunler = kdvDahilSatirlarHam.reduce((s, u) => s + u.kdvDahilSatirToplam, 0);
 
-  // Shopify siparisinin gercek nihai tutari (musterinin gercekten odedigi - KDV dahil)
   const genelToplam = Number(payload.genelToplam) || 0;
 
-  // Indirim orani: urunlerin KDV dahil ham toplami ile musterinin gercekte
-  // odedigi tutar arasindaki farktan hesaplanir, sonra TUM SATIRLARA ORANTILI
-  // olarak uygulanir - ayri bir "Iskonto" satiri GOSTERILMIYOR, direkt her
-  // urunun fiyatina gomuluyor. Boylece satir bazindaki KDV'ler de indirimli
-  // hesaplanir ve fatura basindaki toplamlarla HER ZAMAN birebir tutar.
-  const olcekFaktoru = toplamKdvDahilUrunler > 0 ? (genelToplam / toplamKdvDahilUrunler) : 1;
+  // INDIRIM DAGITIM KURALI: sepete eklenen ILK urun ("ana urun") her zaman
+  // tam liste fiyatiyla faturada gorunur, indirime dokunulmaz. Indirimin
+  // tamami, ana urun DISINDAKI ucretli urun(ler)e kendi tutarlarina orantili
+  // olarak yansitilir. 0 TL'lik hediye urunler zaten degismez. Ana urun
+  // disinda ucretli baska urun yoksa (istisnai durum), indirim mecburen
+  // ana urune yansitilir - aksi halde toplamlar Shopify'daki gercek odenen
+  // tutarla tutmaz.
+  const ANA_URUN_INDEX = 0;
+  const indirimKdvDahil = Math.max(0, Math.round((toplamKdvDahilUrunler - genelToplam) * 100) / 100);
+  const digerUrunlerToplami = kdvDahilSatirlarHam.reduce(
+    (s, u, i) => (i === ANA_URUN_INDEX ? s : s + u.kdvDahilSatirToplam), 0
+  );
 
-  const urunlerNumeric = kdvDahilSatirlarHam.map(u => {
-    const kdvDahilSatirIndirimli = Math.round(u.kdvDahilSatirToplam * olcekFaktoru * 100) / 100;
-    const amtTra = Math.round((kdvDahilSatirIndirimli / (1 + u.vatRate / 100)) * 100) / 100; // matrah (KDV haric, indirimli)
-    const amtVatTra = Math.round((kdvDahilSatirIndirimli - amtTra) * 100) / 100;             // KDV tutari (indirimli)
+  const urunlerNumeric = kdvDahilSatirlarHam.map((u, i) => {
+    let kdvDahilSatirIndirimli;
+    if (i === ANA_URUN_INDEX) {
+      kdvDahilSatirIndirimli = digerUrunlerToplami > 0
+        ? u.kdvDahilSatirToplam
+        : Math.max(0, Math.round((u.kdvDahilSatirToplam - indirimKdvDahil) * 100) / 100);
+    } else if (u.kdvDahilSatirToplam > 0 && digerUrunlerToplami > 0) {
+      const oran = u.kdvDahilSatirToplam / digerUrunlerToplami;
+      kdvDahilSatirIndirimli = Math.max(0, Math.round((u.kdvDahilSatirToplam - indirimKdvDahil * oran) * 100) / 100);
+    } else {
+      kdvDahilSatirIndirimli = u.kdvDahilSatirToplam;
+    }
+    const amtTra = Math.round((kdvDahilSatirIndirimli / (1 + u.vatRate / 100)) * 100) / 100;
+    const amtVatTra = Math.round((kdvDahilSatirIndirimli - amtTra) * 100) / 100;
     const unitPrice = u.qty > 0 ? Math.round((amtTra / u.qty) * 100) / 100 : 0;
     return { ad: u.ad, qty: u.qty, unitPrice, vatRate: u.vatRate, amtTra, amtVatTra };
   });
@@ -221,8 +231,6 @@ async function mysoftFaturaOlustur(payload) {
       telephone1: payload.aliciTelefon || undefined,
       email1: payload.aliciEmail || undefined
     },
-    // Indirim artik her satirin fiyatina orantili olarak gomulu, ayrica bir
-    // "Iskonto" satiri gosterilmiyor - direkt net tutar alinip yansitiliyor.
     invoiceCalculation: {
       lineExtensionAmount: lineExtensionAmount,
       taxExclusiveAmount: vergisizToplam,
