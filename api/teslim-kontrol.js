@@ -22,7 +22,9 @@ const YK_HOST = "ws.yurticikargo.com";
 const YK_PATH = "/KOPSWebServices/ShippingOrderDispatcherServices";
 const YK_USER = process.env.YK_USER;
 const YK_PASS = process.env.YK_PASS;
-const REQ_TIMEOUT_MS = 4000;
+const REQ_TIMEOUT_MS = 8000;   // Yurtiçi bazen yavaş cevap veriyor (16sn'ye kadar gorduk).
+                                // vercel.json'da bu fonksiyona 30sn suresi taninmis durumda,
+                                // 3 deneme x 8sn = en kotu ihtimalle 24sn, sinirin icinde kalir.
 const MAX_TRIES = 3;   // kargo.js ile ayni: ayni calisma icinde 3 kere dene
 
 async function fetchWithTimeout(url, options, ms) {
