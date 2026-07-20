@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "api/teslim-kontrol.js": {
+      "maxDuration": 30
+    },
+    "api/fatura-kes.js": {
+      "maxDuration": 30
+    }
+  }
+}
