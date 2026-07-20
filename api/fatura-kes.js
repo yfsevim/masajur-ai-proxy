@@ -171,29 +171,42 @@ async function mysoftFaturaOlustur(payload) {
   const now = new Date();
   const isoNow = now.toISOString();
 
-  // --- TUM TUTARLARI GERCEK SAYIYA CEVIR ---
-  // Shopify fiyatlari string olarak gelir ("5699.00"), Mysoft sayi (number)
-  // bekliyor - string gonderilirse KDV/tutar hesaplamalari sessizce 0 kaliyordu.
+  // --- TUM TUTARLARI GERCEK SAYIYA CEVIR + KDV'Yİ DOGRU YONDE HESAPLA ---
+  // Shopify fiyatlari string olarak gelir ("5699.00") VE bu fiyatlar KDV DAHIL
+  // fiyatlardir (Turkiye e-ticaretinde standart uygulama - musteri 5699 TL
+  // odedigin de bunun icinde zaten %20 KDV var). Mysoft faturasinda ise
+  // "Birim Fiyat" / "Mal Hizmet Tutari" alanlarinin KDV HARIC (matrah) olmasi
+  // gerekiyor, KDV ayri bir sutunda ustune eklenip gosteriliyor. Bu yuzden
+  // KDV dahil fiyattan geriye dogru matrahi cikariyoruz:
+  //   matrah = kdvDahilFiyat / (1 + oran/100)
+  //   kdv    = kdvDahilFiyat - matrah
   const urunlerNumeric = (payload.urunler || []).map(u => {
     const qty = Number(u.miktar) || 0;
-    const unitPrice = Number(u.birimFiyat) || 0;
     const vatRate = Number(u.kdvOrani) || VARSAYILAN_KDV_ORANI;
-    const amtTra = Math.round(qty * unitPrice * 100) / 100;         // mal/hizmet tutari (KDV haric)
-    const amtVatTra = Math.round(amtTra * (vatRate / 100) * 100) / 100; // KDV tutari
+    const kdvDahilBirimFiyat = Number(u.birimFiyat) || 0;   // Shopify'daki fiyat (KDV dahil)
+    const kdvDahilSatirToplam = Math.round(qty * kdvDahilBirimFiyat * 100) / 100;
+    const amtTra = Math.round((kdvDahilSatirToplam / (1 + vatRate / 100)) * 100) / 100; // matrah (KDV haric)
+    const amtVatTra = Math.round((kdvDahilSatirToplam - amtTra) * 100) / 100;           // KDV tutari
+    const unitPrice = qty > 0 ? Math.round((amtTra / qty) * 100) / 100 : 0;             // KDV haric birim fiyat
     return { ad: u.ad, qty, unitPrice, vatRate, amtTra, amtVatTra };
   });
 
-  // Satirlarin (indirimsiz) toplami - faturada "Mal Hizmet Toplam Tutari" olarak gorunur
+  // Satirlarin (indirimsiz) matrah toplami - faturada "Mal Hizmet Toplam Tutari" olarak gorunur
   const lineExtensionAmount = urunlerNumeric.reduce((s, u) => s + u.amtTra, 0);
 
-  // Shopify siparisinin gercek toplamlari (musterinin gercekten odedigi/borclu oldugu)
-  const genelToplam = Number(payload.genelToplam) || 0;   // KDV dahil, indirim sonrasi nihai tutar
-  const kdvToplam = Number(payload.kdvToplam) || 0;        // Shopify'in hesapladigi toplam KDV
-  const vergisizToplam = Math.round((genelToplam - kdvToplam) * 100) / 100; // KDV haric nihai tutar
+  // Shopify siparisinin gercek nihai tutari (musterinin gercekten odedigi - KDV dahil)
+  const genelToplam = Number(payload.genelToplam) || 0;
+  // Genel KDV oranini (cogunlukla %20) kullanarak, gercekten odenen tutardan
+  // geriye dogru KDV haric tutari hesapla. Shopify'nin kendi total_tax alanina
+  // GUVENMIYORUZ - cogu zaman 0 geliyor (KDV dahil fiyatlandirmada Shopify
+  // ayrica bir vergi hesaplamiyor).
+  const genelKdvOrani = urunlerNumeric.length > 0 ? urunlerNumeric[0].vatRate : VARSAYILAN_KDV_ORANI;
+  const vergisizToplam = Math.round((genelToplam / (1 + genelKdvOrani / 100)) * 100) / 100;
+  const kdvToplam = Math.round((genelToplam - vergisizToplam) * 100) / 100;
 
-  // Indirim = satirlarin ham toplami ile KDV haric nihai tutar arasindaki fark.
-  // Boylece: lineExtensionAmount - indirim = vergisizToplam, vergisizToplam + kdv = genelToplam
-  // matematiksel olarak her zaman tutarli olur.
+  // Indirim (KDV haric bazda) = satirlarin ham matrah toplami ile nihai KDV haric
+  // tutar arasindaki fark. Boylece: lineExtensionAmount - indirim = vergisizToplam,
+  // vergisizToplam + kdv = genelToplam -> matematiksel olarak her zaman tutarli.
   const indirimTutari = Math.round((lineExtensionAmount - vergisizToplam) * 100) / 100;
 
   const invoiceOutboxModel = {
