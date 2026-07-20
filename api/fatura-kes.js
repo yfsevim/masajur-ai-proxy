@@ -58,7 +58,7 @@ async function fetchWithTimeout(url, options, ms) {
 async function getShopifyOrder(orderNumber) {
   const clean = String(orderNumber).replace(/[^0-9]/g, "");
   const fields = "id,name,email,phone,financial_status,fulfillment_status,cancelled_at," +
-    "total_price,subtotal_price,total_tax,currency,tags,note_attributes," +
+    "total_price,subtotal_price,total_tax,total_discounts,currency,tags,note_attributes," +
     "customer,billing_address,shipping_address,line_items";
   const base = `https://${SHOPIFY_STORE}/admin/api/${API_VERSION}/orders.json`;
 
@@ -171,6 +171,31 @@ async function mysoftFaturaOlustur(payload) {
   const now = new Date();
   const isoNow = now.toISOString();
 
+  // --- TUM TUTARLARI GERCEK SAYIYA CEVIR ---
+  // Shopify fiyatlari string olarak gelir ("5699.00"), Mysoft sayi (number)
+  // bekliyor - string gonderilirse KDV/tutar hesaplamalari sessizce 0 kaliyordu.
+  const urunlerNumeric = (payload.urunler || []).map(u => {
+    const qty = Number(u.miktar) || 0;
+    const unitPrice = Number(u.birimFiyat) || 0;
+    const vatRate = Number(u.kdvOrani) || VARSAYILAN_KDV_ORANI;
+    const amtTra = Math.round(qty * unitPrice * 100) / 100;         // mal/hizmet tutari (KDV haric)
+    const amtVatTra = Math.round(amtTra * (vatRate / 100) * 100) / 100; // KDV tutari
+    return { ad: u.ad, qty, unitPrice, vatRate, amtTra, amtVatTra };
+  });
+
+  // Satirlarin (indirimsiz) toplami - faturada "Mal Hizmet Toplam Tutari" olarak gorunur
+  const lineExtensionAmount = urunlerNumeric.reduce((s, u) => s + u.amtTra, 0);
+
+  // Shopify siparisinin gercek toplamlari (musterinin gercekten odedigi/borclu oldugu)
+  const genelToplam = Number(payload.genelToplam) || 0;   // KDV dahil, indirim sonrasi nihai tutar
+  const kdvToplam = Number(payload.kdvToplam) || 0;        // Shopify'in hesapladigi toplam KDV
+  const vergisizToplam = Math.round((genelToplam - kdvToplam) * 100) / 100; // KDV haric nihai tutar
+
+  // Indirim = satirlarin ham toplami ile KDV haric nihai tutar arasindaki fark.
+  // Boylece: lineExtensionAmount - indirim = vergisizToplam, vergisizToplam + kdv = genelToplam
+  // matematiksel olarak her zaman tutarli olur.
+  const indirimTutari = Math.round((lineExtensionAmount - vergisizToplam) * 100) / 100;
+
   const invoiceOutboxModel = {
     eDocumentType: "EARSIVFATURA",
     profile: "EARSIVFATURA",
@@ -182,8 +207,8 @@ async function mysoftFaturaOlustur(payload) {
     senderType: "ELEKTRONIK",
     orderNo: payload.siparisNo,
     orderDate: isoNow,
-    isManuelCalculation: false,      // tutarlari Mysoft hesaplasin (qty * unitPrice + KDV)
-    isSaveAsDraft: false,            // dogrudan GIB'e gonder, taslakta birakma
+    isManuelCalculation: true,   // Toplamlari biz hesaplayip kesin gonderiyoruz (auto-calc hatali cikiyordu)
+    isSaveAsDraft: false,        // dogrudan GIB'e gonder, taslakta birakma
     cargoAccountName: "Yurtiçi Kargo",
     invoiceAccount: {
       // VKN/TCKN bilinmiyorsa GIB standardi geregi "11111111111" (11 tane 1)
@@ -197,12 +222,31 @@ async function mysoftFaturaOlustur(payload) {
       telephone1: payload.aliciTelefon || undefined,
       email1: payload.aliciEmail || undefined
     },
-    invoiceDetail: (payload.urunler || []).map(u => ({
+    // Fatura genel toplamlari - isManuelCalculation:true oldugu icin bu degerler
+    // aynen kullanilir, Shopify siparisindeki gercek tutarlarla birebir eslesir.
+    invoiceCalculation: {
+      lineExtensionAmount: lineExtensionAmount,
+      taxExclusiveAmount: vergisizToplam,
+      taxInclusiveAmount: genelToplam,
+      payableAmount: genelToplam,
+      allowanceTotalAmount: indirimTutari > 0 ? indirimTutari : 0,
+      chargeTotalAmount: 0
+    },
+    // Indirim varsa fatura uzerinde ayri, seffaf bir kalem olarak goster
+    allowanceCharge: indirimTutari > 0 ? [{
+      chargeIndicator: false, // false = iskonto
+      allowanceChargeReason: "İndirim",
+      amount: indirimTutari,
+      baseAmount: lineExtensionAmount
+    }] : undefined,
+    invoiceDetail: urunlerNumeric.map(u => ({
       productName: u.ad,
       unitCode: "C62", // adet
-      qty: u.miktar,
-      unitPriceTra: u.birimFiyat,
-      vatRate: u.kdvOrani || VARSAYILAN_KDV_ORANI
+      qty: u.qty,
+      unitPriceTra: u.unitPrice,
+      amtTra: u.amtTra,
+      vatRate: u.vatRate,
+      amtVatTra: u.amtVatTra
     }))
   };
 
