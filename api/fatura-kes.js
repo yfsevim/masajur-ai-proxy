@@ -186,7 +186,9 @@ async function mysoftFaturaOlustur(payload) {
     isSaveAsDraft: false,            // dogrudan GIB'e gonder, taslakta birakma
     cargoAccountName: "Yurtiçi Kargo",
     invoiceAccount: {
-      vknTckn: payload.aliciVknTckn || undefined,
+      // VKN/TCKN bilinmiyorsa GIB standardi geregi "11111111111" (11 tane 1)
+      // placeholder'i gonderilir - bos/null gonderilirse Mysoft SQL hatasi veriyor.
+      vknTckn: payload.aliciVknTckn || "11111111111",
       accountName: payload.aliciUnvanAdSoyad,
       cityName: payload.aliciIl || undefined,
       citySubdivision: payload.aliciIlce || undefined,
@@ -245,8 +247,13 @@ function buildFaturaPayload(order, faturaTipi, vkn, vergiDairesi, unvan) {
     aliciVknTckn: vkn || null,
     aliciVergiDairesi: vergiDairesi || null,
     aliciAdres: [addr.address1, addr.address2].filter(Boolean).join(" "),
-    aliciIl: addr.province || null,
-    aliciIlce: addr.city || null,
+    // Checkout formu genelde tek bir "sehir" alani topluyor, bu Shopify'da
+    // addr.city olarak geliyor ve aslinda IL bilgisidir (ör. "Balikesir"),
+    // ILCE degildir. addr.province genelde bos geliyor. Bu yuzden province
+    // varsa onu il olarak kullan, yoksa city'yi il say ve ilceyi bos birak
+    // (yanlislikla il adini ilce alanina yazip GIB hatasi almamak icin).
+    aliciIl: addr.province || addr.city || null,
+    aliciIlce: addr.province ? (addr.city || null) : null,
     aliciEmail: order.email || null,
     aliciTelefon: order.phone || addr.phone || null,
     paraBirimi: order.currency || "TRY",
