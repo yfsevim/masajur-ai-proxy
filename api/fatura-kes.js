@@ -117,9 +117,6 @@ async function logFaturaToSheets(orderNumber, tip, aliciAdi, tutar, status) {
 
 const MYSOFT_API_BASE_URL = process.env.MYSOFT_API_BASE_URL || "https://edocumentapi.mysoft.com.tr";
 
-// Token 5 dakika gecerli, fonksiyonlar arasi cache icin modul seviyesinde tutuluyor.
-// NOT: Vercel serverless fonksiyonlari "cold start" oldugunda bu cache sifirlanir,
-// yani cogu cagrida yeni token alinacak - bu normal, sorun degil (token almak hizli).
 let cachedToken = null;
 let cachedTokenExpiresAt = 0;
 
@@ -150,13 +147,10 @@ async function getMysoftAccessToken() {
   }
 
   cachedToken = data.access_token;
-  // Token 5 dakika gecerli - guvenlik payi icin 30 saniye erken suresi dolmus say
   cachedTokenExpiresAt = now + (5 * 60 - 30) * 1000;
   return cachedToken;
 }
 
-// KDV orani genelde %20 (standart oran). Farkli oranli urunlerin varsa
-// bu fonksiyonu urun bazli bir haritaya cevirebiliriz.
 const VARSAYILAN_KDV_ORANI = 20;
 
 async function mysoftFaturaOlustur(payload) {
@@ -171,43 +165,37 @@ async function mysoftFaturaOlustur(payload) {
   const now = new Date();
   const isoNow = now.toISOString();
 
-  // --- TUM TUTARLARI GERCEK SAYIYA CEVIR + KDV'Yİ DOGRU YONDE HESAPLA ---
-  // Shopify fiyatlari string olarak gelir ("5699.00") VE bu fiyatlar KDV DAHIL
-  // fiyatlardir (Turkiye e-ticaretinde standart uygulama - musteri 5699 TL
-  // odedigin de bunun icinde zaten %20 KDV var). Mysoft faturasinda ise
-  // "Birim Fiyat" / "Mal Hizmet Tutari" alanlarinin KDV HARIC (matrah) olmasi
-  // gerekiyor, KDV ayri bir sutunda ustune eklenip gosteriliyor. Bu yuzden
-  // KDV dahil fiyattan geriye dogru matrahi cikariyoruz:
-  //   matrah = kdvDahilFiyat / (1 + oran/100)
-  //   kdv    = kdvDahilFiyat - matrah
-  const urunlerNumeric = (payload.urunler || []).map(u => {
+  // KDV dahil satir toplamlarini (indirim uygulanmadan) hesapla - ilk gecis
+  const kdvDahilSatirlarHam = (payload.urunler || []).map(u => {
     const qty = Number(u.miktar) || 0;
     const vatRate = Number(u.kdvOrani) || VARSAYILAN_KDV_ORANI;
     const kdvDahilBirimFiyat = Number(u.birimFiyat) || 0;   // Shopify'daki fiyat (KDV dahil)
     const kdvDahilSatirToplam = Math.round(qty * kdvDahilBirimFiyat * 100) / 100;
-    const amtTra = Math.round((kdvDahilSatirToplam / (1 + vatRate / 100)) * 100) / 100; // matrah (KDV haric)
-    const amtVatTra = Math.round((kdvDahilSatirToplam - amtTra) * 100) / 100;           // KDV tutari
-    const unitPrice = qty > 0 ? Math.round((amtTra / qty) * 100) / 100 : 0;             // KDV haric birim fiyat
-    return { ad: u.ad, qty, unitPrice, vatRate, amtTra, amtVatTra };
+    return { ad: u.ad, qty, vatRate, kdvDahilSatirToplam };
   });
-
-  // Satirlarin (indirimsiz) matrah toplami - faturada "Mal Hizmet Toplam Tutari" olarak gorunur
-  const lineExtensionAmount = urunlerNumeric.reduce((s, u) => s + u.amtTra, 0);
+  const toplamKdvDahilUrunler = kdvDahilSatirlarHam.reduce((s, u) => s + u.kdvDahilSatirToplam, 0);
 
   // Shopify siparisinin gercek nihai tutari (musterinin gercekten odedigi - KDV dahil)
   const genelToplam = Number(payload.genelToplam) || 0;
-  // Genel KDV oranini (cogunlukla %20) kullanarak, gercekten odenen tutardan
-  // geriye dogru KDV haric tutari hesapla. Shopify'nin kendi total_tax alanina
-  // GUVENMIYORUZ - cogu zaman 0 geliyor (KDV dahil fiyatlandirmada Shopify
-  // ayrica bir vergi hesaplamiyor).
-  const genelKdvOrani = urunlerNumeric.length > 0 ? urunlerNumeric[0].vatRate : VARSAYILAN_KDV_ORANI;
-  const vergisizToplam = Math.round((genelToplam / (1 + genelKdvOrani / 100)) * 100) / 100;
-  const kdvToplam = Math.round((genelToplam - vergisizToplam) * 100) / 100;
 
-  // Indirim (KDV haric bazda) = satirlarin ham matrah toplami ile nihai KDV haric
-  // tutar arasindaki fark. Boylece: lineExtensionAmount - indirim = vergisizToplam,
-  // vergisizToplam + kdv = genelToplam -> matematiksel olarak her zaman tutarli.
-  const indirimTutari = Math.round((lineExtensionAmount - vergisizToplam) * 100) / 100;
+  // Indirim orani: urunlerin KDV dahil ham toplami ile musterinin gercekte
+  // odedigi tutar arasindaki farktan hesaplanir, sonra TUM SATIRLARA ORANTILI
+  // olarak uygulanir - ayri bir "Iskonto" satiri GOSTERILMIYOR, direkt her
+  // urunun fiyatina gomuluyor. Boylece satir bazindaki KDV'ler de indirimli
+  // hesaplanir ve fatura basindaki toplamlarla HER ZAMAN birebir tutar.
+  const olcekFaktoru = toplamKdvDahilUrunler > 0 ? (genelToplam / toplamKdvDahilUrunler) : 1;
+
+  const urunlerNumeric = kdvDahilSatirlarHam.map(u => {
+    const kdvDahilSatirIndirimli = Math.round(u.kdvDahilSatirToplam * olcekFaktoru * 100) / 100;
+    const amtTra = Math.round((kdvDahilSatirIndirimli / (1 + u.vatRate / 100)) * 100) / 100; // matrah (KDV haric, indirimli)
+    const amtVatTra = Math.round((kdvDahilSatirIndirimli - amtTra) * 100) / 100;             // KDV tutari (indirimli)
+    const unitPrice = u.qty > 0 ? Math.round((amtTra / u.qty) * 100) / 100 : 0;
+    return { ad: u.ad, qty: u.qty, unitPrice, vatRate: u.vatRate, amtTra, amtVatTra };
+  });
+
+  const lineExtensionAmount = urunlerNumeric.reduce((s, u) => s + u.amtTra, 0);
+  const kdvToplam = urunlerNumeric.reduce((s, u) => s + u.amtVatTra, 0);
+  const vergisizToplam = Math.round((genelToplam - kdvToplam) * 100) / 100;
 
   const invoiceOutboxModel = {
     eDocumentType: "EARSIVFATURA",
@@ -220,12 +208,10 @@ async function mysoftFaturaOlustur(payload) {
     senderType: "ELEKTRONIK",
     orderNo: payload.siparisNo,
     orderDate: isoNow,
-    isManuelCalculation: true,   // Toplamlari biz hesaplayip kesin gonderiyoruz (auto-calc hatali cikiyordu)
-    isSaveAsDraft: false,        // dogrudan GIB'e gonder, taslakta birakma
+    isManuelCalculation: true,
+    isSaveAsDraft: false,
     cargoAccountName: "Yurtiçi Kargo",
     invoiceAccount: {
-      // VKN/TCKN bilinmiyorsa GIB standardi geregi "11111111111" (11 tane 1)
-      // placeholder'i gonderilir - bos/null gonderilirse Mysoft SQL hatasi veriyor.
       vknTckn: payload.aliciVknTckn || "11111111111",
       accountName: payload.aliciUnvanAdSoyad,
       cityName: payload.aliciIl || undefined,
@@ -235,26 +221,19 @@ async function mysoftFaturaOlustur(payload) {
       telephone1: payload.aliciTelefon || undefined,
       email1: payload.aliciEmail || undefined
     },
-    // Fatura genel toplamlari - isManuelCalculation:true oldugu icin bu degerler
-    // aynen kullanilir, Shopify siparisindeki gercek tutarlarla birebir eslesir.
+    // Indirim artik her satirin fiyatina orantili olarak gomulu, ayrica bir
+    // "Iskonto" satiri gosterilmiyor - direkt net tutar alinip yansitiliyor.
     invoiceCalculation: {
       lineExtensionAmount: lineExtensionAmount,
       taxExclusiveAmount: vergisizToplam,
       taxInclusiveAmount: genelToplam,
       payableAmount: genelToplam,
-      allowanceTotalAmount: indirimTutari > 0 ? indirimTutari : 0,
+      allowanceTotalAmount: 0,
       chargeTotalAmount: 0
     },
-    // Indirim varsa fatura uzerinde ayri, seffaf bir kalem olarak goster
-    allowanceCharge: indirimTutari > 0 ? [{
-      chargeIndicator: false, // false = iskonto
-      allowanceChargeReason: "İndirim",
-      amount: indirimTutari,
-      baseAmount: lineExtensionAmount
-    }] : undefined,
     invoiceDetail: urunlerNumeric.map(u => ({
       productName: u.ad,
-      unitCode: "C62", // adet
+      unitCode: "C62",
       qty: u.qty,
       unitPriceTra: u.unitPrice,
       amtTra: u.amtTra,
@@ -297,18 +276,13 @@ function buildFaturaPayload(order, faturaTipi, vkn, vergiDairesi, unvan) {
       addr.name || "Belirtilmemis");
 
   return {
-    faturaTipi: faturaTipi,              // "KURUMSAL" (e-Fatura) | "BIREYSEL" (e-Arsiv)
+    faturaTipi: faturaTipi,
     siparisNo: order.name,
     faturaTarihi: new Date().toISOString().slice(0, 10),
     aliciUnvanAdSoyad: musteriAdi,
     aliciVknTckn: vkn || null,
     aliciVergiDairesi: vergiDairesi || null,
     aliciAdres: [addr.address1, addr.address2].filter(Boolean).join(" "),
-    // Checkout formu genelde tek bir "sehir" alani topluyor, bu Shopify'da
-    // addr.city olarak geliyor ve aslinda IL bilgisidir (ör. "Balikesir"),
-    // ILCE degildir. addr.province genelde bos geliyor. Bu yuzden province
-    // varsa onu il olarak kullan, yoksa city'yi il say ve ilceyi bos birak
-    // (yanlislikla il adini ilce alanina yazip GIB hatasi almamak icin).
     aliciIl: addr.province || addr.city || null,
     aliciIlce: addr.province ? (addr.city || null) : null,
     aliciEmail: order.email || null,
@@ -321,7 +295,7 @@ function buildFaturaPayload(order, faturaTipi, vkn, vergiDairesi, unvan) {
       ad: li.title,
       miktar: li.quantity,
       birimFiyat: li.price,
-      kdvOrani: 20 // TODO: gercek KDV oranini urun/vergi satirindan al
+      kdvOrani: 20
     }))
   };
 }
@@ -347,14 +321,12 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: false, reason: "order_not_found" });
     }
 
-    // Zaten faturalandiysa tekrar kesme
     const existingTags = order.tags ? order.tags.split(",").map(t => t.trim()) : [];
     if (existingTags.includes(INVOICED_TAG)) {
       console.log("FATURA-KES: zaten faturali, atlaniyor:", orderNumber);
       return res.status(200).json({ ok: true, reason: "already_invoiced" });
     }
 
-    // Iptal/iade edilmisse fatura kesme
     if (order.cancelled_at) {
       console.log("FATURA-KES: siparis iptal edilmis, atlaniyor:", orderNumber);
       await logFaturaToSheets(orderNumber, "-", "-", "-", "ATLANDI: siparis iptal edilmis");
@@ -364,7 +336,6 @@ module.exports = async (req, res) => {
     const vkn = findAttr(order, VKN_TCKN_ATTRIBUTE_NAMES);
     const vergiDairesi = findAttr(order, VERGI_DAIRESI_ATTRIBUTE_NAMES);
     const unvan = findAttr(order, UNVAN_ATTRIBUTE_NAMES);
-    // Kurumsal/bireysel ayrimi yok - hepsi BIREYSEL (e-Arsiv) kesiliyor
     const faturaTipi = "BIREYSEL";
 
     const payload = buildFaturaPayload(order, faturaTipi, vkn, vergiDairesi, unvan);
