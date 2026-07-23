@@ -75,6 +75,17 @@ async function recordYurticiSuccess() {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function backoffDelay(attempt) { return 500 * Math.pow(2, attempt - 1) + Math.random() * 300; }
+
+// SERT SON TARIH: Node.js'in https.request'i bazen baglanti kurulamadigi
+// (ETIMEDOUT) durumlarda kendi setTimeout ayarimizi guvenilir sekilde
+// dinlemiyor - isletim sisteminin kendi (cok daha uzun) baglanti zaman
+// asimini bekleyebiliyor. Bu, toplam calisma suresinin Vercel'in 45sn
+// sinirina carpmasina yol acabiliyor. Butun deneme dongusunu ayrica sert
+// bir zaman siniriyla sariyoruz.
+const HARD_DEADLINE_MS = 20000;
+function hardDeadline(ms) {
+  return new Promise((_, reject) => setTimeout(() => reject(new Error("sert son tarih asildi")), ms));
+}
 const YK_LANG = "TR";
 const YK_REQ_TIMEOUT_MS = 8000;
 const YK_MAX_TRIES = 3;
@@ -185,7 +196,10 @@ async function getKargoInfo(orderNumber) {
   }
 
   try {
-    const xml = await ykSoapPost(ykBuildSoap(key));
+    const xml = await Promise.race([
+      ykSoapPost(ykBuildSoap(key)),
+      hardDeadline(HARD_DEADLINE_MS)
+    ]);
     await recordYurticiSuccess();
     return ykParseXml(xml, key);
   } catch (error) {
