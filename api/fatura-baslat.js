@@ -3,7 +3,7 @@
 //
 // Shopify'da AYRI bir webhook olarak tanimlanir:
 //   Olay: Order fulfillment created / order/fulfilled (ayni "kargoya verildi" olayi)
-//   URL:  https://masajur-ai-proxy.vercel.app/api/fatura-baslat
+//   URL:  https://masajur-ai-proxy.vercel.app/api/fatura-baslat?secret=...
 //
 // Shopify ayni olay icin birden fazla webhook'u ayni anda cagirabilir,
 // yani fulfillment.js (WhatsApp mesaji icin) ve bu dosya (fatura icin)
@@ -82,6 +82,12 @@ async function scheduleTeslimKontrol(orderNumber) {
 
 module.exports = async (req, res) => {
   if (req.method !== "POST") return res.status(200).send("OK");
+
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) {
+    console.error("FATURA-BASLAT: gecersiz secret");
+    return res.status(401).send("Unauthorized");
+  }
 
   try {
     const order = req.body || {};
