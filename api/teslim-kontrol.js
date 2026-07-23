@@ -10,10 +10,12 @@
 const https = require("https");
 
 const SECRET = "masajur_yakkoholding_2128";
-const RECHECK_DELAY = "6h";       // teslim edilmediyse ne kadar sonra tekrar baksin
+const RECHECK_DELAY = "1h";       // 6h -> 1h: teslimat tespiti cok daha hizli olsun
 // fatura-baslat.js ilk kontrolu 1 gun sonra baslatiyor. Buradan itibaren
-// 6 saatte bir kontrol edilirse 16 deneme = 4 gun -> toplam ~5 gun.
-const MAX_DENEME = 16;
+// 1 saatte bir kontrol edilirse 96 deneme = 4 gun -> toplam ~5 gun (oncekiyle ayni sinir).
+// NOT: 1 saatlik aralik, QStash gorev sayisini 6 kata cikarir - hacim arttikca
+// (gunde 30+ siparis) QStash kullanim kotasini takip etmekte fayda var.
+const MAX_DENEME = 96;
 // NOT: Bu sinira ulasilirsa fatura KESILMEZ. Sadece Google Sheets'e alarm
 // kaydi dusulur, sen Mysoft panelinden manuel kontrol edip karar verirsin.
 // Sadece gercekten "teslim edildi" (DLV) onayi gelen siparislere fatura kesilir.
@@ -86,7 +88,7 @@ function soapPostOnce(body) {
 
 // kargo.js'deki ile ayni mantik: bos/hatali cevapta ayni calisma icinde
 // 3 kere ust uste dener. Uc denemede de basarisiz olursa hata firlatir
-// (disaridaki handler bunu yakalayip 6 saat sonraya yeniden zamanlar).
+// (disaridaki handler bunu yakalayip RECHECK_DELAY suresi sonraya yeniden zamanlar).
 async function soapPostWithRetry(body) {
   let lastErr;
   for (let i = 1; i <= MAX_TRIES; i++) {
