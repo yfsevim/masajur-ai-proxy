@@ -12,12 +12,6 @@
 //   MYSOFT_CLIENT_ID, MYSOFT_CLIENT_SECRET -> Mysoft Portal > Firma Bilgileri >
 //                                      Entegrasyon > Erisim Anahtari'ndan alinan degerler
 //   MYSOFT_API_BASE_URL            -> orn: https://edocumentapi.mysoft.com.tr
-//                                      (test ortami icin farkli bir domain verilmis olabilir,
-//                                      Mysoft'un sana soylediginle degistir)
-//   MYSOFT_VKN                     -> sirket VKN'niz (satici VKN, invoiceAccount degil,
-//                                      servis kullanicisina tanimli hesap zaten biliniyor,
-//                                      birden fazla musteri/hesap varsa tenantIdentifierNumber
-//                                      olarak kullanilir - tek hesap oldugu icin genelde bos birakilir)
 //   SHEETS_URL                     -> zaten mevcut (loglama icin, opsiyonel)
 
 const SECRET = "masajur_yakkoholding_2128";
@@ -25,6 +19,32 @@ const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
 const API_VERSION = "2026-04";
 const INVOICED_TAG = "fatura-kesildi";
+
+// Mukerrer fatura kesmeyi engellemek icin gercek bir kilit (webhook.js'deki
+// ile ayni Redis baglantisi). "fatura-kesildi" etiketi TEK BASINA yeterli
+// degil - fatura kesilip etiket eklenene kadar gecen surede, ayni siparis
+// icin iki istek (ornegin QStash'in "en az bir kere teslim" garantisi
+// yuzunden ayni gorevin iki kere tetiklenmesi) neredeyse ayni anda gelirse,
+// ikisi de "henuz etiketlenmemis" gorup ikisi de fatura kesebiliyordu.
+// Redis'teki SETNX (sadece yoksa yaz) atomik oldugu icin bu yarisi engeller.
+const { Redis } = require("@upstash/redis");
+const redis = Redis.fromEnv();
+
+async function acquireFaturaLock(orderNumber) {
+  try {
+    const result = await redis.set("fatura-lock:" + orderNumber, "1", { nx: true, ex: 3600 });
+    return result !== null;
+  } catch (e) {
+    console.error("FATURA-KES: Redis kilit hatasi, guvenli taraf - devam ediliyor:", e && e.message ? e.message : e);
+    return true;
+  }
+}
+
+async function releaseFaturaLock(orderNumber) {
+  try {
+    await redis.del("fatura-lock:" + orderNumber);
+  } catch (e) {}
+}
 
 const VKN_TCKN_ATTRIBUTE_NAMES = [
   "Vergi No", "VKN", "TC Kimlik No", "TCKN", "Vergi Kimlik No", "Kimlik No"
@@ -105,11 +125,6 @@ async function logFaturaToSheets(orderNumber, tip, aliciAdi, tutar, status) {
   }
 }
 
-// ============================================================
-// MYSOFT E-ARSIV FATURA OLUSTURMA (REST + OAuth2)
-// Mysoft.EDocumentApi v8 semasina gore yazildi.
-// ============================================================
-
 const MYSOFT_API_BASE_URL = process.env.MYSOFT_API_BASE_URL || "https://edocumentapi.mysoft.com.tr";
 
 let cachedToken = null;
@@ -160,7 +175,6 @@ async function mysoftFaturaOlustur(payload) {
   const now = new Date();
   const isoNow = now.toISOString();
 
-  // KDV dahil satir toplamlarini (indirim uygulanmadan) hesapla - ilk gecis
   const kdvDahilSatirlarHam = (payload.urunler || []).map(u => {
     const qty = Number(u.miktar) || 0;
     const vatRate = Number(u.kdvOrani) || VARSAYILAN_KDV_ORANI;
@@ -172,13 +186,6 @@ async function mysoftFaturaOlustur(payload) {
 
   const genelToplam = Number(payload.genelToplam) || 0;
 
-  // INDIRIM DAGITIM KURALI: sepete eklenen ILK urun ("ana urun") her zaman
-  // tam liste fiyatiyla faturada gorunur, indirime dokunulmaz. Indirimin
-  // tamami, ana urun DISINDAKI ucretli urun(ler)e kendi tutarlarina orantili
-  // olarak yansitilir. 0 TL'lik hediye urunler zaten degismez. Ana urun
-  // disinda ucretli baska urun yoksa (istisnai durum), indirim mecburen
-  // ana urune yansitilir - aksi halde toplamlar Shopify'daki gercek odenen
-  // tutarla tutmaz.
   const ANA_URUN_INDEX = 0;
   const indirimKdvDahil = Math.max(0, Math.round((toplamKdvDahilUrunler - genelToplam) * 100) / 100);
   const digerUrunlerToplami = kdvDahilSatirlarHam.reduce(
@@ -322,22 +329,31 @@ module.exports = async (req, res) => {
     const orderNumber = body.orderNumber ? String(body.orderNumber) : "";
     if (!orderNumber) return res.status(200).json({ ok: false, reason: "no_order_number" });
 
+    const kilitAlindi = await acquireFaturaLock(orderNumber);
+    if (!kilitAlindi) {
+      console.log("FATURA-KES: baska bir istek bu siparisi zaten isliyor, atlaniyor:", orderNumber);
+      return res.status(200).json({ ok: true, reason: "locked_duplicate" });
+    }
+
     const order = await getShopifyOrder(orderNumber);
     if (!order) {
       console.error("FATURA-KES: siparis bulunamadi:", orderNumber);
       await logFaturaToSheets(orderNumber, "-", "-", "-", "ALARM: Shopify'da siparis bulunamadi - manuel kontrol gerekli");
+      await releaseFaturaLock(orderNumber);
       return res.status(200).json({ ok: false, reason: "order_not_found" });
     }
 
     const existingTags = order.tags ? order.tags.split(",").map(t => t.trim()) : [];
     if (existingTags.includes(INVOICED_TAG)) {
       console.log("FATURA-KES: zaten faturali, atlaniyor:", orderNumber);
+      await releaseFaturaLock(orderNumber);
       return res.status(200).json({ ok: true, reason: "already_invoiced" });
     }
 
     if (order.cancelled_at) {
       console.log("FATURA-KES: siparis iptal edilmis, atlaniyor:", orderNumber);
       await logFaturaToSheets(orderNumber, "-", "-", "-", "ATLANDI: siparis iptal edilmis");
+      await releaseFaturaLock(orderNumber);
       return res.status(200).json({ ok: true, reason: "cancelled" });
     }
 
@@ -359,6 +375,7 @@ module.exports = async (req, res) => {
     } else {
       await logFaturaToSheets(orderNumber, faturaTipi, payload.aliciUnvanAdSoyad, payload.genelToplam,
         "KESILEMEDI: " + (sonuc.mesaj || "bilinmeyen"));
+      await releaseFaturaLock(orderNumber);
       return res.status(200).json({ ok: false, sonuc });
     }
   } catch (error) {
@@ -368,6 +385,7 @@ module.exports = async (req, res) => {
       if (body.orderNumber) {
         await logFaturaToSheets(String(body.orderNumber), "-", "-", "-",
           "ALARM: beklenmeyen hata - " + (error && error.message ? error.message : "bilinmeyen") + " - manuel kontrol gerekli");
+        await releaseFaturaLock(String(body.orderNumber));
       }
     } catch (e2) {}
     return res.status(200).json({ ok: false, reason: "error", detail: error.message });
