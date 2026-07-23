@@ -6,10 +6,7 @@
     "api/fatura-kes.js": {
       "maxDuration": 30
     },
-    "api/kargo.js": {
-      "maxDuration": 30
-    },
-    "api/webhook.js": {
+    "api/webhook-process.js": {
       "maxDuration": 45
     }
   }
