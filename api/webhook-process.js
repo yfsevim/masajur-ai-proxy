@@ -17,6 +17,8 @@
 //   BIR KERE cevap yazar.
 
 const https = require("https");
+const { Redis } = require("@upstash/redis");
+const redis = Redis.fromEnv();
 
 const BASE = "https://masajur-ai-proxy.vercel.app";
 const SECRET = "masajur_yakkoholding_2128";
@@ -28,6 +30,51 @@ const YK_HOST = "ws.yurticikargo.com";
 const YK_PATH = "/KOPSWebServices/ShippingOrderDispatcherServices";
 const YK_USER = process.env.YK_USER;
 const YK_PASS = process.env.YK_PASS;
+
+// Keep-Alive baglanti: her denemede yeniden TCP/TLS el sikismasi yapmak
+// yerine baglantiyi acik tutar, gecikmeyi azaltir.
+const ykAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 10000,
+  maxSockets: 10,
+  minVersion: "TLSv1",
+  rejectUnauthorized: false,
+  ciphers: "DEFAULT:@SECLEVEL=0"
+});
+
+// ============================================================
+// DEVRE KESICI (Circuit Breaker) - teslim-kontrol.js ile ORTAK Redis
+// anahtarlari kullanir, cunku ikisi de ayni Yurtici servisine gidiyor.
+// ============================================================
+const CB_KEY_FAILS = "yurtici-cb:fails";
+const CB_KEY_OPEN_UNTIL = "yurtici-cb:open-until";
+const CB_THRESHOLD = 5;
+const CB_COOLDOWN_SECONDS = 600;
+
+async function isCircuitOpen() {
+  try {
+    const openUntil = await redis.get(CB_KEY_OPEN_UNTIL);
+    return !!(openUntil && Date.now() < Number(openUntil));
+  } catch (e) {
+    return false;
+  }
+}
+async function recordYurticiFailure() {
+  try {
+    const fails = await redis.incr(CB_KEY_FAILS);
+    if (fails >= CB_THRESHOLD) {
+      await redis.set(CB_KEY_OPEN_UNTIL, Date.now() + CB_COOLDOWN_SECONDS * 1000);
+      await redis.set(CB_KEY_FAILS, 0);
+      console.error("YURTICI DEVRE KESICI ACILDI - " + CB_COOLDOWN_SECONDS + "sn boyunca denenmeyecek");
+    }
+  } catch (e) {}
+}
+async function recordYurticiSuccess() {
+  try { await redis.set(CB_KEY_FAILS, 0); } catch (e) {}
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function backoffDelay(attempt) { return 500 * Math.pow(2, attempt - 1) + Math.random() * 300; }
 const YK_LANG = "TR";
 const YK_REQ_TIMEOUT_MS = 8000;
 const YK_MAX_TRIES = 3;
@@ -69,9 +116,7 @@ function ykSoapPostOnce(body) {
         "SOAPAction": "",
         "Content-Length": Buffer.byteLength(body)
       },
-      rejectUnauthorized: false,
-      minVersion: "TLSv1",
-      ciphers: "DEFAULT:@SECLEVEL=0"
+      agent: ykAgent // Keep-Alive: baglantiyi acik tutar, TLS'i tekrarlamaz
     };
     const req = https.request(options, function (resp) {
       let data = "";
@@ -98,6 +143,7 @@ async function ykSoapPost(body) {
       lastErr = e;
       console.error("KARGO DENEME " + i + " HATA:", e && e.message ? e.message : e);
     }
+    if (i < YK_MAX_TRIES) await sleep(backoffDelay(i));
   }
   throw lastErr || new Error("timeout");
 }
@@ -131,10 +177,19 @@ function ykParseXml(xml, key) {
 async function getKargoInfo(orderNumber) {
   const key = String(orderNumber).replace(/[^0-9]/g, "");
   if (!key) return { found: false, reason: "no_number" };
+
+  // Devre kesici acik ise Yurtici'ye hic gitmeden dur.
+  if (await isCircuitOpen()) {
+    console.log("WEBHOOK-PROCESS: devre kesici ACIK, Yurtici'ye gidilmiyor");
+    return { found: false, reason: "circuit_open" };
+  }
+
   try {
     const xml = await ykSoapPost(ykBuildSoap(key));
+    await recordYurticiSuccess();
     return ykParseXml(xml, key);
   } catch (error) {
+    await recordYurticiFailure();
     console.error("KARGO ERROR:", error && error.message ? error.message : error);
     return { found: false, reason: "error", detail: (error && error.message) ? error.message : String(error) };
   }
@@ -142,8 +197,7 @@ async function getKargoInfo(orderNumber) {
 // ============================================================
 
 // --- Konusma hafizasi + mukerrer isleme kilidi (Upstash Redis) ---
-const { Redis } = require("@upstash/redis");
-const redis = Redis.fromEnv();
+// (redis baglantisi dosyanin basinda, devre kesici icin zaten kuruldu)
 const HISTORY_MAX = 20;          // tutulacak son mesaj sayisi (user+assistant)
 const HISTORY_TTL = 172800;      // 2 gun (saniye)
 
