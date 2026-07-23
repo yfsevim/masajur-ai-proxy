@@ -285,10 +285,19 @@ module.exports = async (req, res) => {
     return res.status(200).send("OK - henuz teslim edilmedi, tekrar zamanlandi");
   } catch (error) {
     console.error("TESLIM-KONTROL HATA:", error && error.message ? error.message : error);
-    // Hata olsa da tekrar dene (aginin gecici sorunu olabilir)
+    // Hata olsa da tekrar dene (aginin gecici sorunu olabilir) - ama 5 gunluk
+    // sinira ulasildiysa burada da alarm dusur, sonsuz donguye girmesin.
     try {
       const body = req.body || {};
-      if (body.orderNumber) await scheduleRecheck(String(body.orderNumber), body.deneme || 1);
+      const deneme = body.deneme || 1;
+      if (body.orderNumber) {
+        if (deneme >= MAX_DENEME) {
+          console.error("TESLIM-KONTROL: max deneme asildi (hata yolunda), siparis:", body.orderNumber);
+          await logTeslimAlarmToSheets(String(body.orderNumber), deneme);
+        } else {
+          await scheduleRecheck(String(body.orderNumber), deneme);
+        }
+      }
     } catch (e2) {}
     return res.status(200).send("OK");
   }
