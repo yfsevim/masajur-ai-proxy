@@ -8,7 +8,7 @@ const YK_USER = process.env.YK_USER;
 const YK_PASS = process.env.YK_PASS;
 const YK_LANG = "TR";
 
-const REQ_TIMEOUT_MS = 4000;
+const REQ_TIMEOUT_MS = 8000;   // 4000 -> 8000: Yurtici bazen 16sn'ye kadar yavas cevap veriyor
 const MAX_TRIES = 3;
 
 function buildSoap(key) {
@@ -46,86 +46,3 @@ function soapPostOnce(body) {
       port: 443,
       path: YK_PATH,
       method: "POST",
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        "SOAPAction": "",
-        "Content-Length": Buffer.byteLength(body)
-      },
-      rejectUnauthorized: false,
-      minVersion: "TLSv1",
-      ciphers: "DEFAULT:@SECLEVEL=0"
-    };
-    const req = https.request(options, function (resp) {
-      let data = "";
-      resp.setEncoding("utf8");
-      resp.on("data", function (c) { data += c; });
-      resp.on("end", function () { resolve(data); });
-    });
-    req.on("error", function (e) { reject(e); });
-    req.setTimeout(REQ_TIMEOUT_MS, function () { req.destroy(new Error("timeout")); });
-    req.write(body);
-    req.end();
-  });
-}
-
-async function soapPost(body) {
-  let lastErr;
-  for (let i = 1; i <= MAX_TRIES; i++) {
-    try {
-      const xml = await soapPostOnce(body);
-      if (xml && xml.length > 50) return xml;
-      lastErr = new Error("empty");
-      console.error("KARGO DENEME " + i + ": bos cevap");
-      continue;
-    } catch (e) {
-      lastErr = e;
-      console.error("KARGO DENEME " + i + " HATA:", e && e.message ? e.message : e);
-      continue;
-    }
-  }
-  throw lastErr || new Error("timeout");
-}
-
-function parseXml(xml, key) {
-  const operationMessage = tag(xml, "operationMessage");
-  const operationStatus = tag(xml, "operationStatus");
-  const trackingUrl = tag(xml, "trackingUrl");
-  const receiver = tag(xml, "receiverInfo");
-  const events = [];
-  const re = /<invDocCargoVOArray>([\s\S]*?)<\/invDocCargoVOArray>/g;
-  let mm;
-  while ((mm = re.exec(xml)) !== null) {
-    const b = mm[1];
-    events.push({ unit: tag(b,"unitName"), event: tag(b,"eventName"), city: tag(b,"cityName"), town: tag(b,"townName"), date: tag(b,"eventDate"), time: tag(b,"eventTime") });
-  }
-  if (!operationMessage && events.length === 0) return { found: false, reason: "not_found", orderNumber: key };
-  const last = events.length ? events[events.length - 1] : null;
-  return {
-    found: true, orderNumber: key,
-    statusMessage: operationMessage, statusCode: operationStatus,
-    lastEvent: last ? last.event : null,
-    lastUnit: last ? last.unit : null,
-    lastCity: last ? (last.town + " / " + last.city) : null,
-    lastDate: last ? fmtDate(last.date, last.time) : null,
-    deliveredTo: (operationStatus === "DLV") ? receiver : null,
-    trackingUrl: trackingUrl
-  };
-}
-
-module.exports = async (req, res) => {
-  let orderNumber;
-  if (req.method === "GET") orderNumber = req.query && req.query.key;
-  else orderNumber = req.body && req.body.orderNumber;
-
-  if (!orderNumber) return res.status(200).json({ found: false, reason: "no_number" });
-  const key = String(orderNumber).replace(/[^0-9]/g, "");
-  if (!key) return res.status(200).json({ found: false, reason: "no_number" });
-
-  try {
-    const xml = await soapPost(buildSoap(key));
-    return res.status(200).json(parseXml(xml, key));
-  } catch (error) {
-    console.error("KARGO ERROR:", error && error.message ? error.message : error);
-    return res.status(200).json({ found: false, reason: "error", detail: (error && error.message) ? error.message : String(error) });
-  }
-};
