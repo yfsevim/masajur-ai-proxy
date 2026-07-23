@@ -80,6 +80,18 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Artan bekleme + rastgele jitter: sunucuyu art arda ayni anda zorlamamak icin
 function backoffDelay(attempt) { return 500 * Math.pow(2, attempt - 1) + Math.random() * 300; }
 
+// SERT SON TARIH: Node.js'in https.request'i bazen baglanti kurulamadigi
+// (ETIMEDOUT) durumlarda kendi setTimeout ayarimizi guvenilir sekilde
+// dinlemiyor - isletim sisteminin kendi (cok daha uzun) baglanti zaman
+// asimini bekleyebiliyor. Bu, toplam calisma suresinin bizim planladigimizdan
+// (3 deneme x 8sn = 24sn) cok daha uzun surup Vercel'in kendi 30sn sinirina
+// carpmasina yol acabiliyor. Bu yuzden butun deneme dongusunu ayrica sert
+// bir zaman siniriyla sariyoruz - ne olursa olsun bu sureyi asamaz.
+const HARD_DEADLINE_MS = 20000;
+function hardDeadline(ms) {
+  return new Promise((_, reject) => setTimeout(() => reject(new Error("sert son tarih asildi")), ms));
+}
+
 async function fetchWithTimeout(url, options, ms) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
@@ -167,7 +179,10 @@ async function getKargoStatus(orderNumber) {
     return null;
   }
   try {
-    const xml = await soapPostWithRetry(buildSoap(orderNumber));
+    const xml = await Promise.race([
+      soapPostWithRetry(buildSoap(orderNumber)),
+      hardDeadline(HARD_DEADLINE_MS)
+    ]);
     await recordYurticiSuccess();
     const operationStatus = tag(xml, "operationStatus");
     return operationStatus; // "DLV" = teslim edildi, null/baska deger = henuz degil
