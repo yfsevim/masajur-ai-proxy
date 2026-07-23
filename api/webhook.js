@@ -193,7 +193,11 @@ module.exports = async (req, res) => {
           .then((d) => { console.log("SIPARIS SONUCU:", JSON.stringify(d)); return d; })
           .catch((e) => { console.error("SIPARIS HATA:", e?.message || e); return null; });
 
-        const kargoPromise = jsonFetch(BASE + "/api/kargo", { orderNumber }, 6000)
+        // kargo.js kendi icinde 3 deneme x 8sn yapabiliyor (Yurtici yavas
+        // oldugunda), bu yuzden burada da en az o kadar beklememiz lazim -
+        // 6sn'de kesersek kargo.js'in kendi retry'lari daha bitmeden
+        // "bulunamadi" sanip yanlislikla "kargo bilgisi dusmemis" diyorduk.
+        const kargoPromise = jsonFetch(BASE + "/api/kargo", { orderNumber }, 25000)
           .then((d) => { console.log("KARGO SONUCU:", JSON.stringify(d)); return d; })
           .catch((e) => { console.error("KARGO HATA:", e?.message || e); return null; });
 
