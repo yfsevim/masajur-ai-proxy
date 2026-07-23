@@ -8,6 +8,8 @@
 //       kendini X saat sonraya yeniden zamanlar -> DLV olunca fatura-kes'i cagirir.
 
 const https = require("https");
+const { Redis } = require("@upstash/redis");
+const redis = Redis.fromEnv();
 
 const SECRET = "masajur_yakkoholding_2128";
 const RECHECK_DELAY = "1h";       // 6h -> 1h: teslimat tespiti cok daha hizli olsun
@@ -28,6 +30,55 @@ const REQ_TIMEOUT_MS = 8000;   // Yurtiçi bazen yavaş cevap veriyor (16sn'ye k
                                 // vercel.json'da bu fonksiyona 30sn suresi taninmis durumda,
                                 // 3 deneme x 8sn = en kotu ihtimalle 24sn, sinirin icinde kalir.
 const MAX_TRIES = 3;   // kargo.js ile ayni: ayni calisma icinde 3 kere dene
+
+// Keep-Alive baglanti: her denemede yeniden TCP/TLS el sikismasi yapmak
+// yerine baglantiyi acik tutar, gecikmeyi azaltir.
+const ykAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 10000,
+  maxSockets: 10,
+  minVersion: "TLSv1",
+  rejectUnauthorized: false,
+  ciphers: "DEFAULT:@SECLEVEL=0"
+});
+
+// ============================================================
+// DEVRE KESICI (Circuit Breaker) - webhook-process.js ile ORTAK Redis
+// anahtarlari kullanir, cunku ikisi de ayni Yurtici servisine gidiyor.
+// Ust uste bircok kere basarisiz olursak, bir sure hic denemeyip
+// Yurtici'yi rahat birakiyoruz - hem gereksiz yuk bindirmemis oluruz
+// hem de kendi calisma suremizi bosa harcamayiz.
+// ============================================================
+const CB_KEY_FAILS = "yurtici-cb:fails";
+const CB_KEY_OPEN_UNTIL = "yurtici-cb:open-until";
+const CB_THRESHOLD = 5;          // ust uste 5 tam basarisizliktan sonra devre acilir
+const CB_COOLDOWN_SECONDS = 600; // 10 dakika boyunca hic denenmez
+
+async function isCircuitOpen() {
+  try {
+    const openUntil = await redis.get(CB_KEY_OPEN_UNTIL);
+    return !!(openUntil && Date.now() < Number(openUntil));
+  } catch (e) {
+    return false; // Redis erisilemezse guvenli taraf: devreyi kapali (calisir) say
+  }
+}
+async function recordYurticiFailure() {
+  try {
+    const fails = await redis.incr(CB_KEY_FAILS);
+    if (fails >= CB_THRESHOLD) {
+      await redis.set(CB_KEY_OPEN_UNTIL, Date.now() + CB_COOLDOWN_SECONDS * 1000);
+      await redis.set(CB_KEY_FAILS, 0);
+      console.error("YURTICI DEVRE KESICI ACILDI - " + CB_COOLDOWN_SECONDS + "sn boyunca denenmeyecek");
+    }
+  } catch (e) {}
+}
+async function recordYurticiSuccess() {
+  try { await redis.set(CB_KEY_FAILS, 0); } catch (e) {}
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// Artan bekleme + rastgele jitter: sunucuyu art arda ayni anda zorlamamak icin
+function backoffDelay(attempt) { return 500 * Math.pow(2, attempt - 1) + Math.random() * 300; }
 
 async function fetchWithTimeout(url, options, ms) {
   const controller = new AbortController();
@@ -69,9 +120,7 @@ function soapPostOnce(body) {
         "SOAPAction": "",
         "Content-Length": Buffer.byteLength(body)
       },
-      rejectUnauthorized: false,
-      minVersion: "TLSv1",
-      ciphers: "DEFAULT:@SECLEVEL=0"
+      agent: ykAgent // Keep-Alive: baglantiyi acik tutar, TLS'i tekrarlamaz
     };
     const req = https.request(options, function (resp) {
       let data = "";
@@ -87,7 +136,10 @@ function soapPostOnce(body) {
 }
 
 // kargo.js'deki ile ayni mantik: bos/hatali cevapta ayni calisma icinde
-// 3 kere ust uste dener. Uc denemede de basarisiz olursa hata firlatir
+// 3 kere ust uste dener, ama art arda hemen degil - her denemeden sonra
+// artan bir sure bekler (exponential backoff + jitter). Boylece Yurtici'nin
+// o an yogun olma ihtimaline karsi hem ona ek yuk bindirmemis oluruz hem de
+// basarili olma sansi artar. Uc denemede de basarisiz olursa hata firlatir
 // (disaridaki handler bunu yakalayip RECHECK_DELAY suresi sonraya yeniden zamanlar).
 async function soapPostWithRetry(body) {
   let lastErr;
@@ -101,14 +153,28 @@ async function soapPostWithRetry(body) {
       lastErr = e;
       console.error("TESLIM-KONTROL SOAP DENEME " + i + " HATA:", e && e.message ? e.message : e);
     }
+    if (i < MAX_TRIES) await sleep(backoffDelay(i));
   }
   throw lastErr || new Error("bilinmeyen SOAP hatasi");
 }
 
 async function getKargoStatus(orderNumber) {
-  const xml = await soapPostWithRetry(buildSoap(orderNumber));
-  const operationStatus = tag(xml, "operationStatus");
-  return operationStatus; // "DLV" = teslim edildi, null/baska deger = henuz degil
+  // Devre kesici acik ise Yurtici'ye hic gitmeden dur - "henuz teslim
+  // edilmedi" gibi davranip 6 saat/1 saat sonraya normal sekilde
+  // yeniden zamanlanmasini sagliyoruz (fatura yanlislikla kesilmiyor).
+  if (await isCircuitOpen()) {
+    console.log("TESLIM-KONTROL: devre kesici ACIK, Yurtici'ye gidilmiyor");
+    return null;
+  }
+  try {
+    const xml = await soapPostWithRetry(buildSoap(orderNumber));
+    await recordYurticiSuccess();
+    const operationStatus = tag(xml, "operationStatus");
+    return operationStatus; // "DLV" = teslim edildi, null/baska deger = henuz degil
+  } catch (e) {
+    await recordYurticiFailure();
+    throw e;
+  }
 }
 
 // Bir sonraki kontrolu QStash'e birak
