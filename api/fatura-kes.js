@@ -6,13 +6,6 @@
 //
 // Mysoft.EDocumentApi (v8) OpenAPI semasina gore yazildi.
 // Kullanilan endpoint: POST /api/InvoiceOutbox/invoiceOutbox (Giden Fatura Ekleme)
-//
-// Gerekli env degiskenleri:
-//   SHOPIFY_STORE, SHOPIFY_TOKEN   -> zaten mevcut (siparis.js ile ayni)
-//   MYSOFT_CLIENT_ID, MYSOFT_CLIENT_SECRET -> Mysoft Portal > Firma Bilgileri >
-//                                      Entegrasyon > Erisim Anahtari'ndan alinan degerler
-//   MYSOFT_API_BASE_URL            -> orn: https://edocumentapi.mysoft.com.tr
-//   SHEETS_URL                     -> zaten mevcut (loglama icin, opsiyonel)
 
 const SECRET = "masajur_yakkoholding_2128";
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
@@ -20,13 +13,6 @@ const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
 const API_VERSION = "2026-04";
 const INVOICED_TAG = "fatura-kesildi";
 
-// Mukerrer fatura kesmeyi engellemek icin gercek bir kilit (webhook.js'deki
-// ile ayni Redis baglantisi). "fatura-kesildi" etiketi TEK BASINA yeterli
-// degil - fatura kesilip etiket eklenene kadar gecen surede, ayni siparis
-// icin iki istek (ornegin QStash'in "en az bir kere teslim" garantisi
-// yuzunden ayni gorevin iki kere tetiklenmesi) neredeyse ayni anda gelirse,
-// ikisi de "henuz etiketlenmemis" gorup ikisi de fatura kesebiliyordu.
-// Redis'teki SETNX (sadece yoksa yaz) atomik oldugu icin bu yarisi engeller.
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
 
@@ -75,7 +61,8 @@ async function getShopifyOrder(orderNumber) {
   const clean = String(orderNumber).replace(/[^0-9]/g, "");
   const fields = "id,name,email,phone,financial_status,fulfillment_status,cancelled_at," +
     "total_price,subtotal_price,total_tax,total_discounts,currency,tags,note_attributes," +
-    "customer,billing_address,shipping_address,line_items";
+    "customer,billing_address,shipping_address,line_items,fulfillments," +
+    "created_at,processed_at,payment_gateway_names";
   const base = `https://${SHOPIFY_STORE}/admin/api/${API_VERSION}/orders.json`;
 
   async function fetchByName(name) {
@@ -162,6 +149,8 @@ async function getMysoftAccessToken() {
 }
 
 const VARSAYILAN_KDV_ORANI = 20;
+const YURTICI_KARGO_VKN = "9860008925"; // Yurtici Kargo A.S.'nin kendi VKN'si - tum gonderilerde sabit
+const STORE_WEBSITE_URL = "https://masajur.com";
 
 async function mysoftFaturaOlustur(payload) {
   if (!process.env.MYSOFT_CLIENT_ID || !process.env.MYSOFT_CLIENT_SECRET) {
@@ -227,7 +216,21 @@ async function mysoftFaturaOlustur(payload) {
     orderDate: isoNow,
     isManuelCalculation: true,
     isSaveAsDraft: false,
+    isAddPayableAmountString: true,
     cargoAccountName: "Yurtiçi Kargo",
+    cargoNumber: payload.kargoTakipNo || undefined,
+    waybillInfo: payload.kargoTakipNo ? [{
+      waybillNo: payload.kargoTakipNo,
+      waybillDate: payload.kargoTarihi || isoNow
+    }] : undefined,
+    internetShipmentInfo: {
+      webSiteUrl: STORE_WEBSITE_URL,
+      paymentType: payload.odemeSekli || "DIGER",
+      paymentDate: payload.odemeTarihi || isoNow,
+      shippingDate: payload.kargoTarihi || undefined,
+      shippingAccountName: payload.kargoTakipNo ? "Yurtiçi Kargo" : undefined,
+      shippingAccountVknTckn: payload.kargoTakipNo ? YURTICI_KARGO_VKN : undefined
+    },
     invoiceAccount: {
       vknTckn: payload.aliciVknTckn || "11111111111",
       accountName: payload.aliciUnvanAdSoyad,
@@ -284,11 +287,22 @@ async function mysoftFaturaOlustur(payload) {
   };
 }
 
+function isKapidaOdemeSiparis(order) {
+  const gateways = (order.payment_gateway_names || []).join(" ").toLowerCase();
+  return gateways.includes("cash on delivery") || gateways.includes("kapida") || gateways.includes("cod");
+}
+
 function buildFaturaPayload(order, faturaTipi, vkn, vergiDairesi, unvan) {
   const addr = order.billing_address || order.shipping_address || {};
   const musteriAdi = unvan ||
     ((order.customer && (order.customer.first_name + " " + order.customer.last_name)) ||
       addr.name || "Belirtilmemis");
+
+  const fulfillment = (order.fulfillments && order.fulfillments[0]) || null;
+  const kargoTakipNo = fulfillment ? fulfillment.tracking_number : null;
+  const kargoTarihi = fulfillment ? fulfillment.created_at : null;
+
+  const kapidaOdeme = isKapidaOdemeSiparis(order);
 
   return {
     faturaTipi: faturaTipi,
@@ -306,6 +320,10 @@ function buildFaturaPayload(order, faturaTipi, vkn, vergiDairesi, unvan) {
     araToplam: order.subtotal_price,
     kdvToplam: order.total_tax,
     genelToplam: order.total_price,
+    kargoTakipNo: kargoTakipNo,
+    kargoTarihi: kargoTarihi,
+    odemeTarihi: order.processed_at || order.created_at,
+    odemeSekli: kapidaOdeme ? "KAPIDAODEME" : "KREDIKARTI/BANKAKARTI",
     urunler: (order.line_items || []).map(li => ({
       ad: li.title,
       miktar: li.quantity,
