@@ -227,7 +227,7 @@ async function mysoftFaturaOlustur(payload) {
       webSiteUrl: STORE_WEBSITE_URL,
       paymentType: payload.odemeSekli || "DIGER",
       paymentDate: payload.odemeTarihi || isoNow,
-      shippingDate: payload.kargoTarihi || undefined,
+      shippingDate: payload.kargoTarihi || payload.odemeTarihi || isoNow,
       shippingAccountName: "Yurtiçi Kargo",
       shippingAccountVknTckn: YURTICI_KARGO_VKN
     },
