@@ -324,7 +324,7 @@
 
     <div class="video-card" style="margin-bottom:22px;">
       <div class="video-frame" style="background:var(--sage-soft);">
-        <video controls preload="metadata" playsinline style="width:100%;height:100%;object-fit:cover;border-radius:0;">
+        <video autoplay muted loop controls preload="auto" playsinline style="width:100%;height:100%;object-fit:cover;border-radius:0;">
           <source src="vitrin ürün.mp4" type="video/mp4">
         </video>
       </div>
@@ -463,6 +463,7 @@
 <script>
 /* ================= Tab navigation ================= */
 function goTab(name){
+  if('speechSynthesis' in window) speechSynthesis.cancel();
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
   document.querySelectorAll('.navbtn').forEach(n=>n.classList.toggle('active', n.dataset.tab===name));
@@ -702,7 +703,7 @@ Object.keys(categories).forEach(key=>{
   const p = document.createElement('div');
   p.className = 'pill' + (key===activeCategory ? ' active' : '');
   p.textContent = categories[key].label;
-  p.onclick = ()=>{ activeCategory = key; renderCategoryPills(); renderContentList(); };
+  p.onclick = ()=>{ if('speechSynthesis' in window) speechSynthesis.cancel(); activeCategory = key; renderCategoryPills(); renderContentList(); };
   p.dataset.key = key;
   pillTabsEl.appendChild(p);
 });
@@ -728,6 +729,7 @@ function showRehberList(){
   document.getElementById('rehber-detail').classList.remove('active');
 }
 function openArticle(catKey, idx){
+  if('speechSynthesis' in window) speechSynthesis.cancel();
   const item = categories[catKey].items[idx];
   const box = document.getElementById('articleContent');
   let bodyHtml = '';
@@ -777,7 +779,9 @@ function toggleSpeak(){
 }
 function closeArticle(){ speechSynthesis.cancel(); showRehberList(); }
 renderContentList();
-
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden && 'speechSynthesis' in window) speechSynthesis.cancel();
+});
 /* ================= Timer ================= */
 const TOTAL = 15*60;
 let remaining = TOTAL, running = false, intervalId = null;
