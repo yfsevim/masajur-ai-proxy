@@ -366,7 +366,7 @@
 
     <div class="video-card" style="margin-bottom:22px;">
       <div class="video-frame" style="background:var(--sage-soft);">
-        <video autoplay muted loop controls preload="auto" playsinline style="width:100%;height:100%;object-fit:cover;border-radius:0;">
+        <video class="feature-video home-video" autoplay muted loop preload="auto" playsinline style="width:100%;height:100%;object-fit:cover;border-radius:0;">
           <source src="vitrin ürün.mp4" type="video/mp4">
         </video>
       </div>
@@ -511,6 +511,10 @@ function goTab(name){
   document.getElementById('tab-'+name).classList.add('active');
   document.querySelectorAll('.navbtn').forEach(n=>n.classList.toggle('active', n.dataset.tab===name));
   if(name==='rehber') showRehberList();
+  if(name==='home'){
+    const hv = document.querySelector('.home-video');
+    if(hv){ hv.currentTime = 0; hv.play().catch(()=>{}); }
+  }
   window.scrollTo(0,0);
 }
 
