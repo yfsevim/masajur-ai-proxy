@@ -506,6 +506,7 @@
 /* ================= Tab navigation ================= */
 function goTab(name){
   if('speechSynthesis' in window) speechSynthesis.cancel();
+  document.querySelectorAll('.feature-video').forEach(v=>{ v.pause(); v.currentTime = 0; });
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
   document.querySelectorAll('.navbtn').forEach(n=>n.classList.toggle('active', n.dataset.tab===name));
@@ -524,12 +525,25 @@ const acc = document.getElementById('accordion');
 features.forEach((f,i)=>{
   const item = document.createElement('div');
   item.className = 'acc-item';
-  const videoHtml = f.video ? `<video controls preload="metadata" playsinline style="width:100%;border-radius:12px;margin-bottom:10px;display:block;"><source src="${f.video}" type="video/mp4"></video>` : '';
+  const videoHtml = f.video ? `<video class="feature-video" loop playsinline preload="auto" style="width:100%;border-radius:12px;margin-bottom:10px;display:block;"><source src="${f.video}" type="video/mp4"></video>` : '';
   const benefitHtml = f.benefit ? `<div class="benefit-box"><div class="benefit-label">Boyun sağlığına faydası</div><p>${f.benefit}</p></div>` : '';
   item.innerHTML = `<div class="acc-head" onclick="toggleAcc(${i})"><div class="acc-icon">${f.icon}</div><h4>${f.title}</h4><svg class="acc-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div><div class="acc-body"><div class="acc-body-in">${videoHtml}${benefitHtml}</div></div>`;
   acc.appendChild(item);
 });
-function toggleAcc(i){ document.querySelectorAll('.acc-item')[i].classList.toggle('open'); }
+function toggleAcc(i){
+  const item = document.querySelectorAll('.acc-item')[i];
+  item.classList.toggle('open');
+  const vid = item.querySelector('.feature-video');
+  if(vid){
+    if(item.classList.contains('open')){
+      vid.currentTime = 0;
+      vid.play().catch(()=>{});
+    } else {
+      vid.pause();
+      vid.currentTime = 0;
+    }
+  }
+}
 
 /* ================= Video library ================= */
 /* Placeholder slots — gönderdiğin videoları ve etiketlerini söylediğinde buraya bağlanacak */
