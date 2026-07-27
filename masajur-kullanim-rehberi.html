@@ -9,17 +9,17 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#EEF4F1;
-    --bg-deep:#E3ECE7;
+    --bg:#EEF3FC;
+    --bg-deep:#E1EBFB;
     --card:#FFFFFF;
-    --ink:#1D3733;
-    --ink-soft:#54706A;
-    --ink-faint:#8AA39C;
-    --accent:#D65A2E;
-    --accent-soft:#F3DED2;
-    --sage:#6FA893;
-    --sage-soft:#DCEAE4;
-    --line:#D8E3DE;
+    --ink:#101B36;
+    --ink-soft:#4C5C7D;
+    --ink-faint:#8B9AC0;
+    --accent:#2A55E0;
+    --accent-soft:#DEE6FC;
+    --sage:#5B7FE0;
+    --sage-soft:#E4EBFC;
+    --line:#D9E2F5;
     --radius:20px;
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
@@ -47,6 +47,21 @@
     flex-direction:column;
     position:relative;
     padding:0 22px 100px;
+  }
+
+  .hero-video-wrap{
+    margin:0 -22px;
+    width:calc(100% + 44px);
+    aspect-ratio:9/12;
+    max-height:380px;
+    overflow:hidden;
+    position:relative;
+    background:var(--ink);
+  }
+  .hero-video-wrap video{width:100%;height:100%;object-fit:cover;display:block;}
+  .hero-video-wrap::after{
+    content:"";position:absolute;left:0;right:0;bottom:0;height:70px;
+    background:linear-gradient(transparent, var(--bg));pointer-events:none;
   }
 
   /* ---------- Top bar ---------- */
@@ -106,7 +121,7 @@
   .ring.r1{animation-delay:0s;} .ring.r2{animation-delay:1.2s;} .ring.r3{animation-delay:2.4s;}
   @keyframes pulseOut{0%{width:52px;height:52px;opacity:.55;border-color:var(--accent);}70%{opacity:0;}100%{width:150px;height:150px;opacity:0;border-color:var(--sage);}}
   @media (prefers-reduced-motion: reduce){.ring{animation:none;opacity:.2;width:110px;height:110px;}}
-  .core{position:relative;width:92px;height:92px;border-radius:50%;background:linear-gradient(155deg,#fff, var(--sage-soft));box-shadow:0 8px 26px -6px rgba(29,55,51,.28), inset 0 0 0 1px #ffffffaa;display:flex;align-items:center;justify-content:center;z-index:2;}
+  .core{position:relative;width:92px;height:92px;border-radius:50%;background:linear-gradient(155deg,#fff, var(--sage-soft));box-shadow:0 8px 26px -6px rgba(16,27,54,.28), inset 0 0 0 1px #ffffffaa;display:flex;align-items:center;justify-content:center;z-index:2;}
   .core svg{width:40px;height:40px;stroke:var(--ink);}
   .eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--sage);margin-bottom:9px;}
   h1.headline{font-family:'Space Grotesk',sans-serif;font-size:24px;line-height:1.22;font-weight:700;margin:0 0 9px;letter-spacing:-.01em;}
@@ -125,7 +140,7 @@
     transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease;
   }
   .menu-card:active{transform:scale(.98);}
-  .menu-card:hover{border-color:var(--sage);box-shadow:0 10px 24px -14px rgba(29,55,51,.35);}
+  .menu-card:hover{border-color:var(--sage);box-shadow:0 10px 24px -14px rgba(16,27,54,.35);}
   .menu-icon{flex-shrink:0;width:46px;height:46px;border-radius:13px;display:flex;align-items:center;justify-content:center;background:var(--sage-soft);}
   .menu-card.primary .menu-icon{background:var(--accent-soft);}
   .menu-icon svg{width:21px;height:21px;stroke:var(--ink);}
@@ -136,7 +151,7 @@
 
   /* Horizontal quick-tip card */
   .tip-of-day{
-    background:linear-gradient(135deg, var(--ink) 0%, #2B4C46 100%);
+    background:linear-gradient(135deg, var(--ink) 0%, #16295E 100%);
     border-radius:var(--radius);
     padding:20px 20px 22px;
     color:#fff;
@@ -146,11 +161,11 @@
   }
   .tip-of-day::after{
     content:"";position:absolute;right:-30px;top:-30px;width:130px;height:130px;border-radius:50%;
-    background:radial-gradient(circle, rgba(214,90,46,.35), transparent 70%);
+    background:radial-gradient(circle, rgba(74,120,255,.4), transparent 70%);
   }
-  .tip-of-day .tlabel{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#B9D6CC;margin-bottom:8px;position:relative;}
+  .tip-of-day .tlabel{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#B7C9F5;margin-bottom:8px;position:relative;}
   .tip-of-day h4{font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:600;margin:0 0 6px;position:relative;}
-  .tip-of-day p{font-size:12.8px;line-height:1.55;color:#D7E7E1;margin:0;position:relative;}
+  .tip-of-day p{font-size:12.8px;line-height:1.55;color:#D9E3FA;margin:0;position:relative;}
 
   .footnote{text-align:center;font-size:11.5px;color:var(--ink-soft);margin-top:24px;line-height:1.6;opacity:.8;}
 
@@ -214,7 +229,7 @@
     display:flex;gap:12px;align-items:flex-start;background:var(--accent-soft);border-radius:16px;padding:15px 16px;margin-bottom:18px;
   }
   .disclaimer svg{width:19px;height:19px;stroke:var(--accent);flex-shrink:0;margin-top:1px;}
-  .disclaimer p{font-size:12.2px;color:#7a3d20;line-height:1.55;margin:0;}
+  .disclaimer p{font-size:12.2px;color:#1E3A8A;line-height:1.55;margin:0;}
 
   /* ---------- Video ---------- */
   .video-grid{display:flex;flex-direction:column;gap:14px;}
@@ -223,8 +238,8 @@
     width:100%;aspect-ratio:16/9;background:var(--sage-soft);display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:10px;border-bottom:1px solid var(--line);
   }
-  .video-frame.empty{background:repeating-linear-gradient(135deg, var(--sage-soft), var(--sage-soft) 10px, #e4eeea 10px, #e4eeea 20px);}
-  .play-btn{width:52px;height:52px;border-radius:50%;background:var(--card);display:flex;align-items:center;justify-content:center;box-shadow:0 6px 18px -6px rgba(29,55,51,.3);}
+  .video-frame.empty{background:repeating-linear-gradient(135deg, var(--sage-soft), var(--sage-soft) 10px, #E3EAFC 10px, #E3EAFC 20px);}
+  .play-btn{width:52px;height:52px;border-radius:50%;background:var(--card);display:flex;align-items:center;justify-content:center;box-shadow:0 6px 18px -6px rgba(16,27,54,.3);}
   .play-btn svg{width:19px;height:19px;fill:var(--accent);margin-left:2px;}
   .video-frame .vf-label{font-size:12px;font-weight:600;color:var(--ink-soft);}
   .video-info{padding:14px 16px;}
@@ -288,7 +303,7 @@
     border:1px solid var(--line);
     border-radius:24px;
     padding:8px 6px;
-    box-shadow:0 12px 30px -10px rgba(29,55,51,.25);
+    box-shadow:0 12px 30px -10px rgba(16,27,54,.25);
   }
   .navbtn{
     flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;
@@ -306,14 +321,19 @@
 
   <!-- ================= HOME TAB ================= -->
   <section class="tab active" id="tab-home">
+    <div class="hero-video-wrap">
+      <video autoplay muted loop playsinline controls preload="auto">
+        <source src="yeni.mp4" type="video/mp4">
+      </video>
+    </div>
     <div class="topbar"><div class="wordmark">MASAJUR<span>.</span></div></div>
 
     <div class="hero">
       <div class="pulse-wrap">
         <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
         <div class="core">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 3v4a4 4 0 0 0 4 4h0a4 4 0 0 0 4-4V3"/><path d="M16 12v2a4 4 0 0 1-8 0v-2"/><circle cx="12" cy="20" r="1.4" fill="currentColor" stroke="none"/>
+          <svg viewBox="0 0 24 24" width="42" height="42">
+            <text x="12" y="17.5" text-anchor="middle" font-family="'Space Grotesk',sans-serif" font-size="16.5" font-weight="700" fill="var(--accent)">M</text>
           </svg>
         </div>
       </div>
@@ -345,7 +365,7 @@
       </div>
       <div class="menu-card" onclick="goTab('kullanim')">
         <div class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 0 1 4.6-1.4c0 1.6-2.1 2-2.1 3.6"/><circle cx="12" cy="16.3" r=".4" fill="currentColor" stroke="none"/></svg></div>
-        <div class="menu-text"><h3>Nasıl Kullanılır</h3><p>Butonlar, modlar ve özellikler</p></div>
+        <div class="menu-text"><h3>Özellikler Ne İşe Yarar?</h3><p>Her modun faydası ve nasıl kullanılacağı</p></div>
         <div class="menu-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
       </div>
       <div class="menu-card" onclick="goTab('rehber')">
@@ -374,8 +394,8 @@
   <!-- ================= KULLANIM TAB ================= -->
   <section class="tab" id="tab-kullanim">
     <div class="topbar"><div class="wordmark">MASAJUR<span>.</span></div></div>
-    <h2 class="page-title">Nasıl Kullanılır</h2>
-    <p class="page-sub">Her özelliğin ne işe yaradığını aşağıdan öğrenebilirsin.</p>
+    <h2 class="page-title">Özellikler Ne İşe Yarar?</h2>
+    <p class="page-sub">Her özelliğin ne işe yaradığını ve boynuna nasıl fayda sağladığını aşağıdan öğrenebilirsin.</p>
     <div class="accordion" id="accordion"></div>
     <div class="disclaimer">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 16.5h.01"/><path d="M10.3 3.9L2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
@@ -441,7 +461,7 @@
       </div>
       <div class="navbtn" data-tab="kullanim" onclick="goTab('kullanim')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 0 1 4.6-1.4c0 1.6-2.1 2-2.1 3.6"/></svg>
-        <span>Kullanım</span>
+        <span>Özellikler</span>
       </div>
       <div class="navbtn" data-tab="videolar" onclick="goTab('videolar')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -794,7 +814,7 @@ const statusEl = document.getElementById('timerStatus');
 const spLabel = document.getElementById('spLabel');
 const spIcon = document.getElementById('spIcon');
 function formatTime(s){ const m=Math.floor(s/60).toString().padStart(2,'0'); const sec=(s%60).toString().padStart(2,'0'); return m+':'+sec; }
-function renderTimer(){ timeDisplay.textContent = formatTime(remaining); const progress = 1 - remaining/TOTAL; ring.style.strokeDashoffset = CIRC*(1-progress); ring.style.stroke = remaining===0 ? '#6FA893' : 'var(--accent)'; }
+function renderTimer(){ timeDisplay.textContent = formatTime(remaining); const progress = 1 - remaining/TOTAL; ring.style.strokeDashoffset = CIRC*(1-progress); ring.style.stroke = remaining===0 ? '#5B7FE0' : 'var(--accent)'; }
 function toggleTimer(){
   if(remaining===0) return;
   running = !running;
