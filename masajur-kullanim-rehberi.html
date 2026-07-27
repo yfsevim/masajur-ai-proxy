@@ -116,15 +116,35 @@
     text-align:center;
     padding:14px 0 26px;
   }
-  .pulse-wrap{position:relative;width:150px;height:150px;display:flex;align-items:center;justify-content:center;margin-bottom:20px;}
-  .ring{position:absolute;border-radius:50%;border:1.5px solid var(--sage);opacity:0;animation:pulseOut 3.6s ease-out infinite;}
-  .ring.r1{animation-delay:0s;} .ring.r2{animation-delay:1.2s;} .ring.r3{animation-delay:2.4s;}
-  @keyframes pulseOut{0%{width:52px;height:52px;opacity:.55;border-color:var(--accent);}70%{opacity:0;}100%{width:150px;height:150px;opacity:0;border-color:var(--sage);}}
-  @media (prefers-reduced-motion: reduce){.ring{animation:none;opacity:.2;width:110px;height:110px;}}
-  .core{position:relative;width:92px;height:92px;border-radius:50%;background:linear-gradient(155deg,#fff, var(--sage-soft));box-shadow:0 8px 26px -6px rgba(16,27,54,.28), inset 0 0 0 1px #ffffffaa;display:flex;align-items:center;justify-content:center;z-index:2;}
-  .core svg{width:40px;height:40px;stroke:var(--ink);}
+  .logo-glow-wrap{position:relative;display:flex;align-items:center;justify-content:center;margin:8px auto 26px;padding:14px 0;}
+  .logo-img{position:relative;z-index:2;width:100%;max-width:300px;height:auto;display:block;}
+  .logo-glow{
+    position:absolute;z-index:1;left:50%;top:50%;
+    width:260px;height:110px;border-radius:50%;
+    background:radial-gradient(ellipse, rgba(42,85,224,.4), transparent 72%);
+    filter:blur(16px);
+    transform:translate(-50%,-50%) scale(.9);
+    animation:logoPulse 3.4s ease-in-out infinite;
+  }
+  .logo-glow.g2{
+    width:340px;height:150px;
+    background:radial-gradient(ellipse, rgba(91,127,224,.28), transparent 75%);
+    animation-delay:.8s;
+    animation-duration:3.4s;
+  }
+  @keyframes logoPulse{
+    0%,100%{opacity:.45;transform:translate(-50%,-50%) scale(.88);}
+    50%{opacity:1;transform:translate(-50%,-50%) scale(1.08);}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .logo-glow{animation:none;opacity:.5;}
+  }
   .eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--sage);margin-bottom:9px;}
-  h1.headline{font-family:'Space Grotesk',sans-serif;font-size:24px;line-height:1.22;font-weight:700;margin:0 0 9px;letter-spacing:-.01em;}
+  h1.headline{
+    font-family:'Space Grotesk',sans-serif;font-size:24px;line-height:1.22;font-weight:700;margin:0 0 9px;letter-spacing:-.01em;
+    background-image:linear-gradient(100deg, #57657F 0%, #2A55E0 60%, #5B7FE0 100%);
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:#2A55E0;
+  }
   .sub{font-size:14px;color:var(--ink-soft);line-height:1.55;max-width:320px;margin:0;}
 
   .section-label{
@@ -327,11 +347,10 @@
     <div class="topbar"><div class="wordmark">MASAJUR<span>.</span></div></div>
 
     <div class="hero">
-      <div class="pulse-wrap">
-        <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
-        <div class="core">
-          <img src="masajur-logo.png" alt="Masajur" style="width:62px;height:auto;display:block;">
-        </div>
+      <div class="logo-glow-wrap">
+        <div class="logo-glow g1"></div>
+        <div class="logo-glow g2"></div>
+        <img src="masajur-logo.png" alt="Masajur" class="logo-img">
       </div>
       <div class="eyebrow">Masajur Rehberi</div>
       <h1 class="headline">Cihazını doğru kullan,<br>boynuna iyi bak</h1>
