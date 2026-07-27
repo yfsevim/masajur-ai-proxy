@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Masajur — Kullanım ve Sağlık Rehberi</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#EEF4F1;
+    --bg-deep:#E3ECE7;
+    --card:#FFFFFF;
+    --ink:#1D3733;
+    --ink-soft:#54706A;
+    --ink-faint:#8AA39C;
+    --accent:#D65A2E;
+    --accent-soft:#F3DED2;
+    --sage:#6FA893;
+    --sage-soft:#DCEAE4;
+    --line:#D8E3DE;
+    --radius:20px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    background-image:
+      radial-gradient(circle at 15% -5%, var(--bg-deep) 0%, transparent 45%),
+      radial-gradient(circle at 100% 10%, var(--sage-soft) 0%, transparent 40%);
+    background-attachment:fixed;
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
+  .display{font-family:'Space Grotesk',sans-serif;}
+  .mono{font-family:'IBM Plex Mono',monospace;}
+  ::-webkit-scrollbar{width:0;height:0;}
+
+  .app{
+    max-width:460px;
+    margin:0 auto;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    position:relative;
+    padding:0 22px 100px;
+  }
+
+  /* ---------- Top bar ---------- */
+  .topbar{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:20px 0 6px;
+    min-height:48px;
+    position:sticky;
+    top:0;
+    background:linear-gradient(var(--bg) 78%, transparent);
+    z-index:20;
+  }
+  .wordmark{
+    font-family:'Space Grotesk',sans-serif;
+    font-weight:700;
+    font-size:15px;
+    letter-spacing:.14em;
+    color:var(--ink);
+  }
+  .wordmark span{color:var(--accent);}
+  .backbtn{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:100px;
+    padding:8px 14px 8px 10px;
+    font-size:13px;
+    font-weight:600;
+    color:var(--ink-soft);
+    cursor:pointer;
+    font-family:'Inter',sans-serif;
+  }
+  .backbtn svg{width:16px;height:16px;stroke:var(--ink-soft);}
+
+  /* ---------- Tabs (top-level) ---------- */
+  .tab{display:none;flex:1;flex-direction:column;}
+  .tab.active{display:flex;}
+
+  /* ---------- Sub-views (detail overlays within a tab) ---------- */
+  .subview{display:none;flex:1;flex-direction:column;}
+  .subview.active{display:flex;}
+
+  /* ---------- HOME ---------- */
+  .hero{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    text-align:center;
+    padding:14px 0 26px;
+  }
+  .pulse-wrap{position:relative;width:150px;height:150px;display:flex;align-items:center;justify-content:center;margin-bottom:20px;}
+  .ring{position:absolute;border-radius:50%;border:1.5px solid var(--sage);opacity:0;animation:pulseOut 3.6s ease-out infinite;}
+  .ring.r1{animation-delay:0s;} .ring.r2{animation-delay:1.2s;} .ring.r3{animation-delay:2.4s;}
+  @keyframes pulseOut{0%{width:52px;height:52px;opacity:.55;border-color:var(--accent);}70%{opacity:0;}100%{width:150px;height:150px;opacity:0;border-color:var(--sage);}}
+  @media (prefers-reduced-motion: reduce){.ring{animation:none;opacity:.2;width:110px;height:110px;}}
+  .core{position:relative;width:92px;height:92px;border-radius:50%;background:linear-gradient(155deg,#fff, var(--sage-soft));box-shadow:0 8px 26px -6px rgba(29,55,51,.28), inset 0 0 0 1px #ffffffaa;display:flex;align-items:center;justify-content:center;z-index:2;}
+  .core svg{width:40px;height:40px;stroke:var(--ink);}
+  .eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--sage);margin-bottom:9px;}
+  h1.headline{font-family:'Space Grotesk',sans-serif;font-size:24px;line-height:1.22;font-weight:700;margin:0 0 9px;letter-spacing:-.01em;}
+  .sub{font-size:14px;color:var(--ink-soft);line-height:1.55;max-width:320px;margin:0;}
+
+  .section-label{
+    font-size:11.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-faint);margin:26px 0 10px 2px;
+  }
+  .section-label:first-of-type{margin-top:0;}
+
+  .menu{display:flex;flex-direction:column;gap:12px;}
+  .menu-card{
+    display:flex;align-items:center;gap:16px;background:var(--card);border:1px solid var(--line);
+    border-radius:var(--radius);padding:16px 18px;text-align:left;cursor:pointer;
+    transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  }
+  .menu-card:active{transform:scale(.98);}
+  .menu-card:hover{border-color:var(--sage);box-shadow:0 10px 24px -14px rgba(29,55,51,.35);}
+  .menu-icon{flex-shrink:0;width:46px;height:46px;border-radius:13px;display:flex;align-items:center;justify-content:center;background:var(--sage-soft);}
+  .menu-card.primary .menu-icon{background:var(--accent-soft);}
+  .menu-icon svg{width:21px;height:21px;stroke:var(--ink);}
+  .menu-text h3{font-family:'Space Grotesk',sans-serif;font-size:15.5px;font-weight:600;margin:0 0 3px;}
+  .menu-text p{font-size:12.3px;color:var(--ink-soft);margin:0;line-height:1.4;}
+  .menu-arrow{margin-left:auto;flex-shrink:0;}
+  .menu-arrow svg{width:16px;height:16px;stroke:var(--ink-soft);}
+
+  /* Horizontal quick-tip card */
+  .tip-of-day{
+    background:linear-gradient(135deg, var(--ink) 0%, #2B4C46 100%);
+    border-radius:var(--radius);
+    padding:20px 20px 22px;
+    color:#fff;
+    margin-bottom:22px;
+    position:relative;
+    overflow:hidden;
+  }
+  .tip-of-day::after{
+    content:"";position:absolute;right:-30px;top:-30px;width:130px;height:130px;border-radius:50%;
+    background:radial-gradient(circle, rgba(214,90,46,.35), transparent 70%);
+  }
+  .tip-of-day .tlabel{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#B9D6CC;margin-bottom:8px;position:relative;}
+  .tip-of-day h4{font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:600;margin:0 0 6px;position:relative;}
+  .tip-of-day p{font-size:12.8px;line-height:1.55;color:#D7E7E1;margin:0;position:relative;}
+
+  .footnote{text-align:center;font-size:11.5px;color:var(--ink-soft);margin-top:24px;line-height:1.6;opacity:.8;}
+
+  /* ---------- Generic page header ---------- */
+  .page-title{font-family:'Space Grotesk',sans-serif;font-size:21px;font-weight:700;margin:4px 0 4px;}
+  .page-sub{font-size:13.3px;color:var(--ink-soft);margin:0 0 18px;line-height:1.5;}
+
+  /* ---------- Pill tabs (category switch inside Rehber) ---------- */
+  .pill-tabs{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:18px;}
+  .pill{
+    flex-shrink:0;padding:9px 16px;border-radius:100px;border:1px solid var(--line);background:var(--card);
+    font-size:12.8px;font-weight:600;color:var(--ink-soft);cursor:pointer;white-space:nowrap;
+    transition:all .15s ease;
+  }
+  .pill.active{background:var(--ink);border-color:var(--ink);color:#fff;}
+
+  /* ---------- Content list cards ---------- */
+  .clist{display:flex;flex-direction:column;gap:10px;}
+  .ccard{
+    display:flex;align-items:flex-start;gap:14px;background:var(--card);border:1px solid var(--line);
+    border-radius:16px;padding:15px 16px;cursor:pointer;transition:border-color .15s ease, transform .15s ease;
+  }
+  .ccard:active{transform:scale(.98);}
+  .ccard:hover{border-color:var(--sage);}
+  .ccard .cicon{flex-shrink:0;width:40px;height:40px;border-radius:12px;background:var(--sage-soft);display:flex;align-items:center;justify-content:center;}
+  .ccard .cicon svg{width:19px;height:19px;stroke:var(--ink);}
+  .ccard .ctext{flex:1;}
+  .ccard h4{font-family:'Space Grotesk',sans-serif;font-size:14.3px;font-weight:600;margin:0 0 4px;}
+  .ccard p{font-size:12.3px;color:var(--ink-soft);margin:0;line-height:1.45;}
+  .ccard .carrow{flex-shrink:0;margin-top:10px;}
+  .ccard .carrow svg{width:14px;height:14px;stroke:var(--ink-faint);}
+
+  /* ---------- Article detail ---------- */
+  .article-tag{
+    display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--accent);background:var(--accent-soft);padding:5px 11px;border-radius:100px;margin-bottom:12px;
+  }
+  .article-body p{font-size:14px;line-height:1.75;color:var(--ink-soft);margin:0 0 14px;}
+  .article-body strong{color:var(--ink);}
+  .steplist{list-style:none;padding:0;margin:0 0 6px;display:flex;flex-direction:column;gap:10px;}
+  .steplist li{
+    display:flex;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 14px;
+    font-size:13.3px;color:var(--ink-soft);line-height:1.55;
+  }
+  .stepnum{
+    flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--sage-soft);color:var(--ink);
+    font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;
+  }
+  .article-meta{display:flex;gap:14px;margin-bottom:18px;}
+  .article-meta span{font-size:11.5px;color:var(--ink-faint);display:flex;align-items:center;gap:5px;font-weight:600;}
+  .article-meta svg{width:13px;height:13px;stroke:var(--ink-faint);}
+
+  .disclaimer{
+    display:flex;gap:12px;align-items:flex-start;background:var(--accent-soft);border-radius:16px;padding:15px 16px;margin-bottom:18px;
+  }
+  .disclaimer svg{width:19px;height:19px;stroke:var(--accent);flex-shrink:0;margin-top:1px;}
+  .disclaimer p{font-size:12.2px;color:#7a3d20;line-height:1.55;margin:0;}
+
+  /* ---------- Video ---------- */
+  .video-grid{display:flex;flex-direction:column;gap:14px;}
+  .video-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;}
+  .video-frame{
+    width:100%;aspect-ratio:16/9;background:var(--sage-soft);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:10px;border-bottom:1px solid var(--line);
+  }
+  .video-frame.empty{background:repeating-linear-gradient(135deg, var(--sage-soft), var(--sage-soft) 10px, #e4eeea 10px, #e4eeea 20px);}
+  .play-btn{width:52px;height:52px;border-radius:50%;background:var(--card);display:flex;align-items:center;justify-content:center;box-shadow:0 6px 18px -6px rgba(29,55,51,.3);}
+  .play-btn svg{width:19px;height:19px;fill:var(--accent);margin-left:2px;}
+  .video-frame .vf-label{font-size:12px;font-weight:600;color:var(--ink-soft);}
+  .video-info{padding:14px 16px;}
+  .video-info h4{font-family:'Space Grotesk',sans-serif;font-size:14.5px;font-weight:600;margin:0 0 4px;}
+  .video-info p{font-size:12.3px;color:var(--ink-soft);margin:0;line-height:1.5;}
+  .video-badge{
+    display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:700;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--ink-faint);background:var(--bg-deep);padding:4px 10px;border-radius:100px;margin-top:8px;
+  }
+
+  /* ---------- Accordion (Kullanım) ---------- */
+  .accordion{display:flex;flex-direction:column;gap:10px;}
+  .acc-item{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;}
+  .acc-head{display:flex;align-items:center;gap:14px;padding:15px 16px;cursor:pointer;}
+  .acc-icon{width:38px;height:38px;border-radius:11px;background:var(--sage-soft);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .acc-icon svg{width:18px;height:18px;stroke:var(--ink);}
+  .acc-head h4{font-family:'Space Grotesk',sans-serif;font-size:14.5px;font-weight:600;margin:0;flex:1;}
+  .acc-chevron{width:16px;height:16px;stroke:var(--ink-soft);flex-shrink:0;transition:transform .2s ease;}
+  .acc-item.open .acc-chevron{transform:rotate(180deg);}
+  .acc-body{max-height:0;overflow:hidden;transition:max-height .25s ease;}
+  .acc-item.open .acc-body{max-height:420px;}
+  .acc-body-in{padding:0 16px 16px 68px;font-size:13px;color:var(--ink-soft);line-height:1.6;}
+
+  /* ---------- Timer ---------- */
+  .timer-wrap{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 0 20px;}
+  .ring-shell{position:relative;width:230px;height:230px;margin-bottom:8px;}
+  .ring-shell svg{transform:rotate(-90deg);width:230px;height:230px;}
+  .ring-bg{fill:none;stroke:var(--line);stroke-width:10;}
+  .ring-progress{fill:none;stroke:var(--accent);stroke-width:10;stroke-linecap:round;transition:stroke-dashoffset .3s linear, stroke .3s ease;}
+  .ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;}
+  .time-display{font-family:'IBM Plex Mono',monospace;font-size:42px;font-weight:600;letter-spacing:-.01em;color:var(--ink);}
+  .time-caption{font-size:11.5px;color:var(--ink-soft);font-weight:500;letter-spacing:.04em;text-transform:uppercase;}
+  .timer-controls{display:flex;gap:12px;margin-top:26px;width:100%;}
+  .btn{flex:1;border:none;border-radius:100px;padding:14px 0;font-family:'Inter',sans-serif;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:transform .12s ease;}
+  .btn:active{transform:scale(.97);}
+  .btn-primary{background:var(--ink);color:#fff;}
+  .btn-ghost{background:var(--card);color:var(--ink);border:1px solid var(--line);}
+  .btn svg{width:16px;height:16px;}
+  .btn-primary svg{stroke:#fff;fill:#fff;}
+  .btn-ghost svg{stroke:var(--ink);}
+  .timer-status{margin-top:16px;font-size:13px;color:var(--sage);font-weight:600;min-height:18px;text-align:center;}
+  .timer-status.done{color:var(--accent);}
+
+  /* ---------- Bottom Nav ---------- */
+  .bottomnav{
+    position:fixed;bottom:0;left:0;right:0;
+    display:flex;justify-content:center;
+    background:linear-gradient(transparent, var(--bg) 30%);
+    padding:14px 16px 18px;
+    z-index:30;
+  }
+  .bottomnav-inner{
+    max-width:428px;width:100%;
+    display:flex;justify-content:space-between;
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:24px;
+    padding:8px 6px;
+    box-shadow:0 12px 30px -10px rgba(29,55,51,.25);
+  }
+  .navbtn{
+    flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;
+    padding:8px 2px;border-radius:16px;cursor:pointer;color:var(--ink-faint);
+    transition:background .15s ease, color .15s ease;
+  }
+  .navbtn svg{width:19px;height:19px;stroke:currentColor;}
+  .navbtn span{font-size:10px;font-weight:600;}
+  .navbtn.active{color:var(--accent);background:var(--accent-soft);}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ================= HOME TAB ================= -->
+  <section class="tab active" id="tab-home">
+    <div class="topbar"><div class="wordmark">MASAJUR<span>.</span></div></div>
+
+    <div class="hero">
+      <div class="pulse-wrap">
+        <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+        <div class="core">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 3v4a4 4 0 0 0 4 4h0a4 4 0 0 0 4-4V3"/><path d="M16 12v2a4 4 0 0 1-8 0v-2"/><circle cx="12" cy="20" r="1.4" fill="currentColor" stroke="none"/>
+          </svg>
+        </div>
+      </div>
+      <div class="eyebrow">Masajur Rehberi</div>
+      <h1 class="headline">Cihazını doğru kullan,<br>boynuna iyi bak</h1>
+      <p class="sub">Kullanım videoları, cihaz özellikleri, boyun sağlığı bilgisi ve kullanım sayacı — hepsi tek yerde.</p>
+    </div>
+
+    <div class="video-card" style="margin-bottom:22px;">
+      <div class="video-frame" style="background:var(--sage-soft);">
+        <video controls preload="metadata" playsinline style="width:100%;height:100%;object-fit:cover;border-radius:0;">
+          <source src="vitrin_urun.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <div class="tip-of-day">
+      <div class="tlabel">Günün Önerisi</div>
+      <h4>Ekran molalarını ihmal etme</h4>
+      <p>Her 30-40 dakikada bir 1-2 dakikalığına ekrandan uzaklaş, başını yavaşça sağa-sola çevir. Küçük moladan, boynun uzun vadede çok şey kazanır.</p>
+    </div>
+
+    <div class="section-label">Hızlı Erişim</div>
+    <div class="menu">
+      <div class="menu-card primary" onclick="goTab('videolar')">
+        <div class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>
+        <div class="menu-text"><h3>Video Kütüphanesi</h3><p>Kullanım videoları ve gösterimler</p></div>
+        <div class="menu-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
+      </div>
+      <div class="menu-card" onclick="goTab('kullanim')">
+        <div class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 0 1 4.6-1.4c0 1.6-2.1 2-2.1 3.6"/><circle cx="12" cy="16.3" r=".4" fill="currentColor" stroke="none"/></svg></div>
+        <div class="menu-text"><h3>Nasıl Kullanılır</h3><p>Butonlar, modlar ve özellikler</p></div>
+        <div class="menu-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
+      </div>
+      <div class="menu-card" onclick="goTab('rehber')">
+        <div class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
+        <div class="menu-text"><h3>Boyun Sağlığı Rehberi</h3><p>Makaleler, egzersizler, beslenme, yaşam tarzı</p></div>
+        <div class="menu-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
+      </div>
+      <div class="menu-card" onclick="goTab('sayac')">
+        <div class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></div>
+        <div class="menu-text"><h3>15 Dakika Sayaç</h3><p>Kullanım süreni takip et</p></div>
+        <div class="menu-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
+      </div>
+    </div>
+
+    <div class="footnote">Sorularınız için WhatsApp destek hattımızdan bize ulaşabilirsiniz.</div>
+  </section>
+
+  <!-- ================= VIDEO TAB ================= -->
+  <section class="tab" id="tab-videolar">
+    <div class="topbar"><div class="wordmark">MASAJUR<span>.</span></div></div>
+    <h2 class="page-title">Video Kütüphanesi</h2>
+    <p class="page-sub">Cihazının nasıl kullanılacağını videolarla adım adım izle.</p>
+    <div class="video-grid" id="videoGrid"></div>
+  </section>
+
+  <!-- ================= KULLANIM TAB ================= -->
+  <section class="tab" id="tab-kullanim">
+    <div class="topbar"><div class="wordmark">MASAJUR<span>.</span></div></div>
+    <h2 class="page-title">Nasıl Kullanılır</h2>
+    <p class="page-sub">Her özelliğin ne işe yaradığını aşağıdan öğrenebilirsin.</p>
+    <div class="accordion" id="accordion"></div>
+    <div class="disclaimer">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 16.5h.01"/><path d="M10.3 3.9L2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+      <p>Tek seferde <b>15 dakikayı</b> aşmamanı öneririz. Süreni takip etmek için Sayaç sekmesini kullanabilirsin.</p>
+    </div>
+  </section>
+
+  <!-- ================= REHBER TAB ================= -->
+  <section class="tab" id="tab-rehber">
+    <!-- list sub-view -->
+    <div class="subview active" id="rehber-list">
+      <div class="topbar"><div class="wordmark">MASAJUR<span>.</span></div></div>
+      <h2 class="page-title">Boyun Sağlığı Rehberi</h2>
+      <p class="page-sub">Boynuna iyi gelen bilgiler tek yerde.</p>
+
+      <div class="pill-tabs" id="pillTabs"></div>
+
+      <div class="disclaimer" id="rehberDisclaimer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 16.5h.01"/><path d="M10.3 3.9L2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+        <p>Bu içerikler genel bilgilendirme amaçlıdır. Şiddetli, uzun süren veya yayılan ağrılarda mutlaka bir hekime danışın.</p>
+      </div>
+
+      <div class="clist" id="contentList"></div>
+    </div>
+
+    <!-- detail sub-view -->
+    <div class="subview" id="rehber-detail">
+      <div class="topbar">
+        <button class="backbtn" onclick="closeArticle()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>Geri</button>
+      </div>
+      <div id="articleContent"></div>
+    </div>
+  </section>
+
+  <!-- ================= SAYAÇ TAB ================= -->
+  <section class="tab" id="tab-sayac">
+    <div class="topbar"><div class="wordmark">MASAJUR<span>.</span></div></div>
+    <div class="timer-wrap">
+      <div class="ring-shell">
+        <svg viewBox="0 0 230 230">
+          <circle class="ring-bg" cx="115" cy="115" r="100"/>
+          <circle class="ring-progress" id="ringProgress" cx="115" cy="115" r="100"/>
+        </svg>
+        <div class="ring-center">
+          <div class="time-display" id="timeDisplay">15:00</div>
+          <div class="time-caption" id="timeCaption">Kullanım süresi</div>
+        </div>
+      </div>
+      <div class="timer-controls">
+        <button class="btn btn-ghost" onclick="resetTimer()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>Sıfırla</button>
+        <button class="btn btn-primary" id="startPauseBtn" onclick="toggleTimer()"><svg id="spIcon" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg><span id="spLabel">Başlat</span></button>
+      </div>
+      <div class="timer-status" id="timerStatus"></div>
+    </div>
+  </section>
+
+  <!-- ================= BOTTOM NAV ================= -->
+  <div class="bottomnav">
+    <div class="bottomnav-inner">
+      <div class="navbtn active" data-tab="home" onclick="goTab('home')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+        <span>Ana Sayfa</span>
+      </div>
+      <div class="navbtn" data-tab="kullanim" onclick="goTab('kullanim')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 0 1 4.6-1.4c0 1.6-2.1 2-2.1 3.6"/></svg>
+        <span>Kullanım</span>
+      </div>
+      <div class="navbtn" data-tab="videolar" onclick="goTab('videolar')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <span>Video</span>
+      </div>
+      <div class="navbtn" data-tab="rehber" onclick="goTab('rehber')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        <span>Rehber</span>
+      </div>
+      <div class="navbtn" data-tab="sayac" onclick="goTab('sayac')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+        <span>Sayaç</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ================= Tab navigation ================= */
+function goTab(name){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  document.querySelectorAll('.navbtn').forEach(n=>n.classList.toggle('active', n.dataset.tab===name));
+  if(name==='rehber') showRehberList();
+  window.scrollTo(0,0);
+}
+
+/* ================= Kullanım accordion ================= */
+const features = [
+  { title:"Açma / Kapama", icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v8"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>', text:"Gövde üzerindeki tek düğmeye basılı tutarak cihazı açıp kapatabilirsin. Açıldığında gösterge ışığı yanar." },
+  { title:"Isı Modu", icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c0 4-4 5-4 9a4 4 0 0 0 8 0c0-2-1-3-1-3s1 3-1 3-1-2-1-4"/></svg>', text:"Isı düğmesine basarak hafif ısıtma özelliğini açıp kapatabilirsin. İlk kullanımlarda düşük seviyeden başlamanı öneririz.", video:"ISI.mp4" },
+  { title:"Masaj / Titreşim Modu", icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10v4"/><path d="M8 6v12"/><path d="M12 3v18"/><path d="M16 6v12"/><path d="M20 10v4"/></svg>', text:"Mod düğmesine her bastığında titreşim şiddeti bir seviye artar (1-3 arası). Son seviyeden sonra tekrar başa döner.", video:"MASAJ_-_TITRESIM.mp4" },
+  { title:"Germe Modu", icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3"/><path d="M12 18v3"/><path d="M4.2 4.2l2.1 2.1"/><path d="M17.7 17.7l2.1 2.1"/><path d="M3 12h3"/><path d="M18 12h3"/></svg>', text:"Germe düğmesiyle cihazın nazik çekme/germe hareketini aktif edebilirsin. İlk kullanımda düşük şiddetle başlayıp vücudunun tepkisine göre ayarla.", video:"GERME1_1.mp4" },
+  { title:"EMS Modu", icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>', text:"EMS düğmesine basarak düşük frekanslı elektriksel uyarım modunu açabilirsin. Cildinde hafif bir karıncalanma hissetmen normaldir; ilk kullanımda en düşük şiddet seviyesinden başlamanı öneririz.", video:"EMS.mp4" },
+  { title:"Otomatik Kapanma", icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>', text:"Cihaz, güvenliğin için kullanım süresi doldurduğunda kendini otomatik olarak kapatır. Sayaç sekmesinden süreni takip edebilirsin." },
+  { title:"Şarj", icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 11v2"/><path d="M6 10v4"/></svg>', text:"Cihazı USB kablo ile şarj edebilirsin. Şarj sırasında gösterge ışığı yanıp söner, dolduğunda sabit yanar." }
+];
+const acc = document.getElementById('accordion');
+features.forEach((f,i)=>{
+  const item = document.createElement('div');
+  item.className = 'acc-item';
+  const videoHtml = f.video ? `<video controls preload="metadata" playsinline style="width:100%;border-radius:12px;margin-bottom:10px;display:block;"><source src="${f.video}" type="video/mp4"></video>` : '';
+  item.innerHTML = `<div class="acc-head" onclick="toggleAcc(${i})"><div class="acc-icon">${f.icon}</div><h4>${f.title}</h4><svg class="acc-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div><div class="acc-body"><div class="acc-body-in">${videoHtml}${f.text}</div></div>`;
+  acc.appendChild(item);
+});
+function toggleAcc(i){ document.querySelectorAll('.acc-item')[i].classList.toggle('open'); }
+
+/* ================= Video library ================= */
+/* Placeholder slots — gönderdiğin videoları ve etiketlerini söylediğinde buraya bağlanacak */
+const videos = [
+  { title:"Video 1", desc:"İçerik ve etiket henüz belirlenmedi.", tag:"Eklenecek" },
+  { title:"Video 2", desc:"İçerik ve etiket henüz belirlenmedi.", tag:"Eklenecek" },
+  { title:"Video 3", desc:"İçerik ve etiket henüz belirlenmedi.", tag:"Eklenecek" }
+];
+const videoGrid = document.getElementById('videoGrid');
+videos.forEach(v=>{
+  const card = document.createElement('div');
+  card.className = 'video-card';
+  card.innerHTML = `
+    <div class="video-frame empty">
+      <div class="play-btn"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>
+      <div class="vf-label">Video yakında eklenecek</div>
+    </div>
+    <div class="video-info">
+      <h4>${v.title}</h4>
+      <p>${v.desc}</p>
+      <div class="video-badge">${v.tag}</div>
+    </div>`;
+  videoGrid.appendChild(card);
+});
+
+/* ================= Rehber (health guide) content ================= */
+const iconBook='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>';
+const iconMove='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="4" r="2"/><path d="M12 6v6l3 6"/><path d="M12 12l-3 6"/><path d="M9 9l-4 2"/><path d="M15 9l4 2"/></svg>';
+const iconFood='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><path d="M6 1v3"/><path d="M10 1v3"/><path d="M14 1v3"/></svg>';
+const iconLife='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/></svg>';
+
+const categories = {
+  makaleler: {
+    label:"Makaleler",
+    items:[
+      { title:"Boyun Ağrısının Yaygın Nedenleri", meta:"4 dk okuma", icon:iconBook,
+        body:[
+          "Boyun ağrısı çoğu zaman tek bir sebepten değil, günlük alışkanlıkların birikimli etkisinden kaynaklanır.",
+          "En sık rastlanan nedenler arasında <strong>uzun süre öne eğik ekran kullanımı</strong>, yanlış yastıkla uyumak, ani hareketler ve stres kaynaklı kas gerginliği sayılabilir.",
+          "Kaslar sürekli aynı pozisyonda gerginlik altında kaldığında, kan akışı azalır ve zamanla sertlik, tutulma hissi ortaya çıkar.",
+          "Bu tür ağrıların büyük kısmı yaşam tarzı düzenlemeleri, düzenli hareket ve doğru ergonomiyle belirgin şekilde azaltılabilir."
+        ]},
+      { title:"Doğru Duruşun Önemi", meta:"3 dk okuma", icon:iconBook,
+        body:[
+          "Omurga kulaktan omuza, omuzdan kalçaya kadar düz bir hizada olduğunda boyun kasları en az yükü taşır.",
+          "Baş öne doğru her 2.5 cm kaydığında, boyun omurgasına binen yük yaklaşık iki katına çıkar — buna bazen 'metin boynu' (text neck) da denir.",
+          "Otururken kulaklarını omuzlarının üzerinde tutmaya, çeneni hafif içeri çekmeye çalış. Bu basit farkındalık zamanla otomatik bir alışkanlığa dönüşür."
+        ]},
+      { title:"Ekran Başında Boyun Sağlığı", meta:"5 dk okuma", icon:iconBook,
+        body:[
+          "Ekranın üst kenarı göz hizasında veya hafif altında olmalı; böylece başını aşağı eğmek zorunda kalmazsın.",
+          "Dizüstü bilgisayar kullanıyorsan bir stand ile yükseltip harici klavye-mouse kullanmak boynuna büyük kolaylık sağlar.",
+          "20-20-20 kuralını dene: her 20 dakikada bir, 20 saniyeliğine 20 adım öteye (ya da uzağa) bak ve boynunu gevşet.",
+          "Telefonu göz hizasına kaldırarak kullanmak, sürekli aşağı bakmaktan çok daha az yük bindirir."
+        ]},
+      { title:"Uyku Pozisyonu ve Yastık Seçimi", meta:"4 dk okuma", icon:iconBook,
+        body:[
+          "İdeal yastık, uyurken boyun omurgasını omurga hizasında düz tutan yastıktır — ne çok yüksek ne çok düşük.",
+          "Sırtüstü uyuyanlar için ince-orta yükseklikte, yan uyuyanlar için omuz genişliğini destekleyecek daha kalın bir yastık genelde daha uygundur.",
+          "Yüzükoyun uyumak boynu uzun süre yana çevrili tuttuğu için genellikle önerilmez.",
+          "Yastığını her 12-18 ayda bir gözden geçirmek, desteğini kaybetmiş bir yastıkla uyumayı önler."
+        ]},
+      { title:"Stres ve Kas Gerginliği İlişkisi", meta:"3 dk okuma", icon:iconBook,
+        body:[
+          "Stres altındayken omuz ve boyun kasları fark etmeden kasılır; bu 'omuzları kulağa çekme' hissi tanıdık gelebilir.",
+          "Uzun süreli stres, kasların dinlenme fırsatı bulamadan sürekli tetikte kalmasına ve zamanla gerginlik/ağrıya yol açabilir.",
+          "Derin nefes egzersizleri, kısa yürüyüşler ve bilinçli gevşeme molaları bu döngüyü kırmada etkili yöntemlerdir."
+        ]}
+    ]
+  },
+  egzersiz: {
+    label:"Egzersizler",
+    items:[
+      { title:"Çene Çekme (Chin Tuck)", meta:"2 dk · 10 tekrar", icon:iconMove,
+        steps:["Dik otur veya ayakta dur, omuzlarını gevşet.","Çeneni hafifçe içeri çek, sanki 'ikinci bir çene' oluşturuyormuş gibi.","Başını yukarı-aşağı eğmeden 3-5 saniye bu pozisyonda tut.","Yavaşça bırak, 10 kez tekrarla."]},
+      { title:"Boyun Yan Esnetme", meta:"2 dk · her yöne 3 tekrar", icon:iconMove,
+        steps:["Dik otur, omuzlarını aşağı ve gevşek tut.","Başını yavaşça sağ omzuna doğru eğ, hafif bir gerilme hissedene kadar.","20-30 saniye bekle, derin nefes al.","Yavaşça başa dön ve sol tarafa aynısını tekrarla."]},
+      { title:"Boyun Döndürme", meta:"2 dk · her yöne 5 tekrar", icon:iconMove,
+        steps:["Dik otur, çeneni hafif içeri çek.","Başını yavaşça sağa çevir, omzunun üzerinden bakmaya çalış.","3-5 saniye bekle, ortaya dön.","Sol tarafa aynı şekilde tekrarla, hareketleri yavaş ve kontrollü yap."]},
+      { title:"Omuz Silkme (Shrug)", meta:"2 dk · 15 tekrar", icon:iconMove,
+        steps:["Ayakta veya oturarak, kollarını yanlarda bırak.","Omuzlarını kulaklarına doğru yukarı kaldır.","2-3 saniye tut, ardından yavaşça bırak.","15 tekrar boyunca akıcı bir ritimde devam et."]},
+      { title:"Kürek Kemiği Sıkma", meta:"2 dk · 12 tekrar", icon:iconMove,
+        steps:["Dik otur, kollarını yanlarında rahat bırak.","Kürek kemiklerini birbirine yaklaştırır gibi geriye ve aşağı çek.","5 saniye tut, göğsünü hafif öne aç.","Yavaşça bırak ve tekrarla."]},
+      { title:"Üst Trapez Esnetme", meta:"3 dk · her yöne 2 tekrar", icon:iconMove,
+        steps:["Sağ elinle sandalyenin kenarından veya bacağından hafifçe tutun.","Başını sol omzuna doğru yavaşça eğ.","Nazikçe sol elinle başına hafif bir ek baskı uygulayabilirsin.","20-30 saniye bekle, karşı tarafa geç."]}
+    ]
+  },
+  beslenme: {
+    label:"Beslenme",
+    items:[
+      { title:"Omega-3 Kaynakları", meta:"3 dk okuma", icon:iconFood,
+        body:["Somon, uskumru, sardalya gibi yağlı balıklar ile ceviz ve keten tohumu, omega-3 yağ asitleri açısından zengindir.","Bu besinler, dengeli bir beslenme düzeninin parçası olarak genel vücut konforuna katkı sağlayabilir.","Haftada 2-3 porsiyon balık tüketimi, dengeli bir hedef olarak düşünülebilir."]},
+      { title:"Magnezyum Açısından Zengin Besinler", meta:"3 dk okuma", icon:iconFood,
+        body:["Badem, ıspanak, kabak çekirdeği ve tam tahıllar magnezyumun iyi kaynaklarıdır.","Magnezyum, kasların normal fonksiyonuna katkıda bulunan minerallerden biridir.","Gün içine küçük bir avuç kuruyemiş veya bir porsiyon yeşil yapraklı sebze eklemek pratik bir başlangıçtır."]},
+      { title:"Bol Su Tüketimi", meta:"2 dk okuma", icon:iconFood,
+        body:["Yeterli sıvı alımı, kasların ve disklerin sağlıklı fonksiyonu için önemli bir temeldir.","Gün boyunca düzenli aralıklarla su içmek, sadece susadığında içmekten daha etkilidir.","Yanında bir su şişesi bulundurmak, tüketimi kolay bir alışkanlığa dönüştürür."]},
+      { title:"C Vitamini ve Kolajen Üretimi", meta:"3 dk okuma", icon:iconFood,
+        body:["C vitamini, vücudun doğal kolajen üretim sürecine katkıda bulunan besin öğelerinden biridir.","Turunçgiller, kivi, kırmızı biber ve brokoli iyi C vitamini kaynaklarıdır.","Çeşitli renkte sebze ve meyveyi tabağında bulundurmak pratik bir yaklaşımdır."]},
+      { title:"İşlenmiş Gıda ve Şekerden Kaçınma", meta:"2 dk okuma", icon:iconFood,
+        body:["Aşırı işlenmiş gıdalar ve fazla şeker tüketimi, genel vücut konforunu olumsuz etkileyebilir.","Mümkün olduğunca doğal, az işlenmiş besinleri tercih etmek uzun vadede fayda sağlar.","Küçük adımlarla başlamak — örneğin şekerli içecekleri suyla değiştirmek — sürdürülebilir bir yoldur."]},
+      { title:"Kafein Tüketimini Dengelemek", meta:"2 dk okuma", icon:iconFood,
+        body:["Aşırı kafein, bazı kişilerde kas gerginliğini ve uyku kalitesini olumsuz etkileyebilir.","Günün ikinci yarısında kafeini azaltmak, gece uyku kalitesine katkı sağlayabilir.","Kendi toleransını tanımak ve ona göre dengelemek en sağlıklı yaklaşımdır."]}
+    ]
+  },
+  yasam: {
+    label:"Yaşam Tarzı",
+    items:[
+      { title:"Masa Başı Ergonomisi", meta:"4 dk okuma", icon:iconLife,
+        body:["Sandalyenin yüksekliğini, ayakların yere düz bastığı ve dizlerin kalça hizasında olduğu şekilde ayarla.","Ekranın üst kenarı göz hizasında olmalı; klavye ve mouse dirseklerin 90 derece açı yapacağı mesafede durmalı.","Sırtını destekleyen bir sandalye ve gerektiğinde bel yastığı kullanmak, duruşu korumada yardımcı olur."]},
+      { title:"Düzenli Mola Verme", meta:"2 dk okuma", icon:iconLife,
+        body:["Uzun süre aynı pozisyonda kalmak, en doğru duruşta bile zamanla yorgunluk yaratır.","Her saat başı ayağa kalkıp birkaç adım atmak, kan dolaşımını ve kas esnekliğini destekler.","Telefon alarmı veya masaüstü hatırlatıcılar, bu alışkanlığı unutmamana yardımcı olabilir."]},
+      { title:"Aktif Kalma ve Yürüyüş", meta:"3 dk okuma", icon:iconLife,
+        body:["Düzenli yürüyüş, tüm vücut kaslarını nazikçe çalıştırarak genel esnekliği destekler.","Günde 20-30 dakikalık tempolu bir yürüyüş, basit ama etkili bir alışkanlıktır.","Yürürken omuzları gevşek, başı dik tutmaya özen göstermek boyun için ekstra fayda sağlar."]},
+      { title:"Yüzme ve Pilates", meta:"3 dk okuma", icon:iconLife,
+        body:["Yüzme, eklemlere binen yükü azaltırken üst sırt ve boyun çevresi kasları nazikçe çalıştırır.","Pilates, gövde (core) kaslarını güçlendirerek duruşu destekler, bu da dolaylı olarak boyun yükünü azaltır.","Her iki aktivite de düzenli ve ölçülü şekilde yapıldığında en iyi sonucu verir."]},
+      { title:"Telefon Kullanım Alışkanlığı", meta:"2 dk okuma", icon:iconLife,
+        body:["Telefona sürekli aşağı bakmak, boyun omurgasına normalin birkaç katı yük bindirebilir.","Telefonu göz hizasına yakın tutmak veya sık sık kısa molalar vermek bu yükü azaltır.","Uzun mesajlaşma/okuma seanslarında ara sıra başını dik tutup birkaç saniye dinlendirmek faydalıdır."]},
+      { title:"Kaliteli Uyku", meta:"3 dk okuma", icon:iconLife,
+        body:["Düzenli bir uyku saati ve karanlık, sessiz bir ortam, kasların gece boyunca gerçek anlamda dinlenmesine yardımcı olur.","Yatmadan önce ekran süresini azaltmak hem uyku kalitesini hem de dolaylı olarak boyun/omuz gerginliğini etkileyebilir.","Uygun yastık ve yatak pozisyonu, bu bölümün 'Uyku Pozisyonu' makalesinde detaylandırılmıştır."]}
+    ]
+  }
+};
+
+let activeCategory = 'makaleler';
+const pillTabsEl = document.getElementById('pillTabs');
+Object.keys(categories).forEach(key=>{
+  const p = document.createElement('div');
+  p.className = 'pill' + (key===activeCategory ? ' active' : '');
+  p.textContent = categories[key].label;
+  p.onclick = ()=>{ activeCategory = key; renderCategoryPills(); renderContentList(); };
+  p.dataset.key = key;
+  pillTabsEl.appendChild(p);
+});
+function renderCategoryPills(){
+  document.querySelectorAll('.pill').forEach(p=>p.classList.toggle('active', p.dataset.key===activeCategory));
+}
+function renderContentList(){
+  const list = document.getElementById('contentList');
+  list.innerHTML = '';
+  categories[activeCategory].items.forEach((item, idx)=>{
+    const card = document.createElement('div');
+    card.className = 'ccard';
+    card.onclick = ()=>openArticle(activeCategory, idx);
+    card.innerHTML = `
+      <div class="cicon">${item.icon}</div>
+      <div class="ctext"><h4>${item.title}</h4><p>${item.meta}</p></div>
+      <div class="carrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>`;
+    list.appendChild(card);
+  });
+}
+function showRehberList(){
+  document.getElementById('rehber-list').classList.add('active');
+  document.getElementById('rehber-detail').classList.remove('active');
+}
+function openArticle(catKey, idx){
+  const item = categories[catKey].items[idx];
+  const box = document.getElementById('articleContent');
+  let bodyHtml = '';
+  if(item.steps){
+    bodyHtml = '<ul class="steplist">' + item.steps.map((s,i)=>`<li><span class="stepnum">${i+1}</span><span>${s}</span></li>`).join('') + '</ul>';
+  } else {
+    bodyHtml = '<div class="article-body">' + item.body.map(p=>`<p>${p}</p>`).join('') + '</div>';
+  }
+  box.innerHTML = `
+    <span class="article-tag">${categories[catKey].label}</span>
+    <h2 class="page-title">${item.title}</h2>
+    <div class="article-meta"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>${item.meta}</span></div>
+    ${bodyHtml}
+    <div class="disclaimer" style="margin-top:8px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 16.5h.01"/><path d="M10.3 3.9L2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+      <p>Genel bilgilendirme amaçlıdır, tıbbi tavsiye yerine geçmez. Şikayetlerin devam ederse bir sağlık uzmanına danış.</p>
+    </div>`;
+  document.getElementById('rehber-list').classList.remove('active');
+  document.getElementById('rehber-detail').classList.add('active');
+  window.scrollTo(0,0);
+}
+function closeArticle(){ showRehberList(); }
+renderContentList();
+
+/* ================= Timer ================= */
+const TOTAL = 15*60;
+let remaining = TOTAL, running = false, intervalId = null;
+const ring = document.getElementById('ringProgress');
+const CIRC = 2*Math.PI*100;
+ring.style.strokeDasharray = CIRC; ring.style.strokeDashoffset = 0;
+const timeDisplay = document.getElementById('timeDisplay');
+const timeCaption = document.getElementById('timeCaption');
+const statusEl = document.getElementById('timerStatus');
+const spLabel = document.getElementById('spLabel');
+const spIcon = document.getElementById('spIcon');
+function formatTime(s){ const m=Math.floor(s/60).toString().padStart(2,'0'); const sec=(s%60).toString().padStart(2,'0'); return m+':'+sec; }
+function renderTimer(){ timeDisplay.textContent = formatTime(remaining); const progress = 1 - remaining/TOTAL; ring.style.strokeDashoffset = CIRC*(1-progress); ring.style.stroke = remaining===0 ? '#6FA893' : 'var(--accent)'; }
+function toggleTimer(){
+  if(remaining===0) return;
+  running = !running;
+  if(running){
+    spLabel.textContent = 'Duraklat'; spIcon.innerHTML = '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>';
+    statusEl.textContent = 'Sayaç çalışıyor'; statusEl.classList.remove('done'); timeCaption.textContent = 'Kalan süre';
+    intervalId = setInterval(()=>{ remaining--; renderTimer(); if(remaining<=0) finishTimer(); },1000);
+  } else {
+    spLabel.textContent = 'Devam Et'; spIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/>';
+    statusEl.textContent = 'Duraklatıldı'; clearInterval(intervalId);
+  }
+}
+function finishTimer(){
+  clearInterval(intervalId); running = false; remaining = 0; renderTimer();
+  spLabel.textContent = 'Başlat'; spIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/>';
+  timeCaption.textContent = 'Süre tamamlandı'; statusEl.textContent = 'Süre doldu — cihazını kapatabilirsin'; statusEl.classList.add('done');
+  if(navigator.vibrate) navigator.vibrate([200,100,200]);
+  try{ const ctx = new (window.AudioContext||window.webkitAudioContext)(); const o=ctx.createOscillator(); const g=ctx.createGain(); o.connect(g); g.connect(ctx.destination); o.frequency.value=660; g.gain.setValueAtTime(0.15, ctx.currentTime); o.start(); o.stop(ctx.currentTime+0.35); }catch(e){}
+}
+function resetTimer(){
+  clearInterval(intervalId); running = false; remaining = TOTAL; renderTimer();
+  spLabel.textContent = 'Başlat'; spIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/>';
+  statusEl.textContent = ''; statusEl.classList.remove('done'); timeCaption.textContent = 'Kullanım süresi';
+}
+renderTimer();
+</script>
+</body>
+</html>
