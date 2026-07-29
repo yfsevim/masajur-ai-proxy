@@ -287,13 +287,17 @@
   .acc-chevron{width:16px;height:16px;stroke:var(--ink-soft);flex-shrink:0;transition:transform .2s ease;}
   .acc-item.open .acc-chevron{transform:rotate(180deg);}
   .acc-body{max-height:0;overflow:hidden;transition:max-height .25s ease;}
-  .acc-item.open .acc-body{max-height:900px;}
+  .acc-item.open .acc-body{max-height:1100px;}
   .acc-body-in{padding:0 16px 16px 68px;font-size:13px;color:var(--ink-soft);line-height:1.6;}
   .benefit-box{
-    background:var(--sage-soft);border-radius:14px;padding:13px 15px;margin-top:2px;
+    background:var(--sage-soft);border-radius:14px;padding:14px 15px;margin-top:2px;
   }
   .benefit-label{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink);margin-bottom:6px;}
   .benefit-box p{margin:0;font-size:12.8px;color:var(--ink-soft);line-height:1.6;}
+  .point-list{display:flex;flex-direction:column;gap:11px;}
+  .point-item{font-size:12.8px;line-height:1.6;color:var(--ink-soft);}
+  .point-h{font-weight:700;color:var(--ink);}
+  .point-p{color:var(--ink-soft);}
 
   /* ---------- Timer ---------- */
   .timer-wrap{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 0 20px;}
@@ -535,17 +539,34 @@ function goTab(name){
 
 /* ================= Kullanım accordion ================= */
 const features = [
-  { title:"Isı Modu", color:"linear-gradient(155deg,#FF9466,#FF5A36)", icon:'<svg viewBox="0 0 24 24" fill="#fff" stroke="none"><path d="M12 2c0 4.5-5 6-5 10.5A5 5 0 0 0 12 17.5a5 5 0 0 0 5-5c0-1.2-.5-2-.5-2s.5 2.5-1.5 2.5-1-2.3-1-4.3C14 6.5 12 4 12 2z"/></svg>', benefit:"Isı, boyun bölgesindeki kan dolaşımını hızlandırarak kas ağrılarını, kramp hissini ve tutulmayı hafifletmeye yardımcı olur. Boyun fıtığı ve boyun düzleşmesine eşlik eden gerginliğin çözülmesine, uyuşma hissinin azalmasına katkıda bulunur.", video:"ISI.mp4" },
-  { title:"Masaj / Titreşim Modu", color:"linear-gradient(155deg,#5B8CFF,#2A55E0)", icon:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h2l2-7 3 14 3-11 2 4h6"/></svg>', benefit:"Titreşimli masaj, kas dokusunu derinlemesine uyararak kan akışını hızlandırır; kas ağrılarını, kramp ve tutulma hissini hafifletmeye yardımcı olur. Boyun fıtığı ve boyun düzleşmesine eşlik eden gerginliğin azalmasına, uyuşma hissinin gerilemesine destek olur.", video:"MASAJ - TITRESIM.mp4" },
-  { title:"Germe Modu", color:"linear-gradient(155deg,#B98CFF,#8B5CF6)", icon:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v5"/><path d="M12 17v5"/><path d="M4.5 4.5l3 3"/><path d="M16.5 16.5l3 3"/><path d="M2 12h5"/><path d="M17 12h5"/><path d="M4.5 19.5l3-3"/><path d="M16.5 7.5l3-3"/></svg>', benefit:"Germe modu, boyun kaslarını kademeli olarak esnetip omurlar arasındaki baskıyı hafifletir. Boyun fıtığına eşlik eden rahatsızlığın, kas ağrısının ve kramp hissinin azalmasına yardımcı olur; boyun düzleşmesinde kasların daha esnek kalmasını ve uyuşma hissinin gerilemesini destekler.", video:"GERME1.1.mp4" },
-  { title:"EMS Modu", color:"linear-gradient(155deg,#FFCF5C,#F5A623)", icon:'<svg viewBox="0 0 24 24" fill="#fff" stroke="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>', benefit:"EMS, kasları hafif ve kontrollü kasılmalara yönlendirerek kan dolaşımını hızlandırır; kas ağrısı, kramp ve uyuşma hissinin azalmasına yardımcı olur. Boyun fıtığı ve boyun düzleşmesine eşlik eden kas gerginliğinin gevşemesine katkıda bulunur. Kalp pili taşıyanlar, hamileler ve açık yara üzerinde kullanılmamalıdır.", video:"EMS.mp4" }
+  { title:"Isı Terapisi", color:"linear-gradient(155deg,#FF9466,#FF5A36)", icon:'<svg viewBox="0 0 24 24" fill="#fff" stroke="none"><path d="M12 2c0 4.5-5 6-5 10.5A5 5 0 0 0 12 17.5a5 5 0 0 0 5-5c0-1.2-.5-2-.5-2s.5 2.5-1.5 2.5-1-2.3-1-4.3C14 6.5 12 4 12 2z"/></svg>', points:[
+      {h:"Kas gevşemesi sağlar:", p:"Sıcaklık, kas liflerini gevşetir. Bu sayede boyunda meydana gelen kas spazmları ve tutulmalar azalır."},
+      {h:"Kan dolaşımını artırır:", p:"Isı, bölgedeki damarların genişlemesini sağlar. Böylece daha fazla oksijen ve besin kaslara ulaşır, iyileşme süreci hızlanır."},
+      {h:"Ağrı sinyallerini azaltır:", p:"Sıcaklık, sinir uçlarını yatıştırarak ağrı algısını hafifletir."},
+      {h:"Hareket kabiliyetini artırır:", p:"Sertlik ve tutulmayı azaltarak boynun daha rahat hareket etmesine yardımcı olur."}
+    ], video:"ISI.mp4" },
+  { title:"Masaj & Titreşim Terapisi", color:"linear-gradient(155deg,#5B8CFF,#2A55E0)", icon:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h2l2-7 3 14 3-11 2 4h6"/></svg>', points:[
+      {h:"Kas Gerginliğini Azaltır:", p:"Titreşim ve derin doku masajı, kaslara mikro düzeyde uyarılar göndererek kas liflerinin gevşemesini sağlar. Özellikle uzun süre masa başında çalışan veya stres kaynaklı boyun kasılmaları yaşayan kişilerde rahatlama etkisi yaratır."},
+      {h:"Kan Dolaşımını Artırır:", p:"Titreşim ve derin doku masaj uygulaması, bölgesel kan akışını hızlandırır. Bu da dokulara daha fazla oksijen ve besin taşınmasını sağlar, iyileşme sürecini hızlandırır."},
+      {h:"Hareket Kabiliyetini Artırır:", p:"Kasları gevşettiği için boyun bölgesinde esnekliği artırır. Bu da başı sağa-sola döndürme veya yukarı-aşağı hareket ettirme gibi günlük hareketleri daha konforlu hâle getirir."}
+    ], video:"MASAJ - TITRESIM.mp4" },
+  { title:"Germe Terapisi", color:"linear-gradient(155deg,#B98CFF,#8B5CF6)", icon:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v5"/><path d="M12 17v5"/><path d="M4.5 4.5l3 3"/><path d="M16.5 16.5l3 3"/><path d="M2 12h5"/><path d="M17 12h5"/><path d="M4.5 19.5l3-3"/><path d="M16.5 7.5l3-3"/></svg>', points:[
+      {h:"Duruş Bozukluklarını Gidermeye Yardımcı Olur:", p:"Boyundaki kaslar esnemediğinde, omuzlar öne doğru eğilebilir ve kötü bir duruş gelişebilir. Germe hareketleri, boyun ve omuz kaslarını hizalayarak daha dik bir postür kazanılmasını destekler."},
+      {h:"Boyun Hareket Kabiliyetini Artırır:", p:"Zamanla kasların sertleşmesi ve tutulması, boyun hareketlerini kısıtlayabilir. Germe terapisi, kasları esneterek boynun daha rahat hareket etmesini sağlar ve hareket kabiliyetini artırır."},
+      {h:"Kan Dolaşımını Hızlandırır:", p:"Esneme hareketleri kan damarlarını genişleterek kan dolaşımını artırır. Böylece kaslara daha fazla oksijen ve besin taşınarak iyileşme süreci hızlanır."}
+    ], video:"GERME1.1.mp4" },
+  { title:"Elektriksel Kas Uyarımı Terapisi", color:"linear-gradient(155deg,#FFCF5C,#F5A623)", icon:'<svg viewBox="0 0 24 24" fill="#fff" stroke="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>', points:[
+      {h:"Sinirleri uyararak ağrıyı azaltır:", p:"Elektriksel kas uyarımı terapisi, ağrı sinyallerini bloke ederek beyne giden ağrı hissini azaltabilir. Bu, özellikle kronik boyun ağrısı yaşayanlar için oldukça faydalıdır."},
+      {h:"Kas Spazmlarını ve Tutulmaları Önler:", p:"Kasların kontrollü şekilde kasılmasını sağlayarak spazmların ve sertliklerin giderilmesine yardımcı olur."},
+      {h:"Stres ve Gerginliği Hafifletir:", p:"Kasları rahatlatarak vücudu gevşetir ve stres seviyesini düşürmeye yardımcı olur. Düzenli kullanım, hem fiziksel hem de zihinsel rahatlama sağlar."}
+    ], video:"EMS.mp4" }
 ];
 const acc = document.getElementById('accordion');
 features.forEach((f,i)=>{
   const item = document.createElement('div');
   item.className = 'acc-item';
   const videoHtml = f.video ? `<video class="feature-video" loop playsinline preload="auto" style="width:100%;border-radius:12px;margin-bottom:10px;display:block;"><source src="${f.video}" type="video/mp4"></video>` : '';
-  const benefitHtml = f.benefit ? `<div class="benefit-box"><div class="benefit-label">Boyun sağlığına faydası</div><p>${f.benefit}</p></div>` : '';
+  const benefitHtml = f.points ? `<div class="benefit-box"><div class="point-list">${f.points.map(pt=>`<div class="point-item"><span class="point-h">${pt.h}</span> <span class="point-p">${pt.p}</span></div>`).join('')}</div></div>` : '';
   item.innerHTML = `<div class="acc-head" onclick="toggleAcc(${i})"><div class="acc-icon" style="background:${f.color}">${f.icon}</div><h4>${f.title}</h4><svg class="acc-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div><div class="acc-body"><div class="acc-body-in">${videoHtml}${benefitHtml}</div></div>`;
   acc.appendChild(item);
 });
