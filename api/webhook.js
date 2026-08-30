@@ -1,207 +1,307 @@
-module.exports = async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
-  }
+// api/webhook.js
+// WhatsApp -> Shopify siparis + Yurtici kargo + Claude -> cevap
+// Hobby plan (10sn limit) icin: siparis & kargo PARALEL + her fetch'e timeout.
+// + Her mesaj Google Sheets'e kaydedilir (SHEETS_URL).
+// + Riskli kelimelerde yetkililere 'temsilci_bildirim' sablonu gonderilir.
+// + Konusma hafizasi (Upstash Redis): son mesajlar hatirlanir.
+
+const BASE = "https://masajur-ai-proxy.vercel.app";
+
+// --- Konusma hafizasi (Upstash Redis) ---
+const { Redis } = require("@upstash/redis");
+const redis = Redis.fromEnv();
+const HISTORY_MAX = 20;          // tutulacak son mesaj sayisi (user+assistant)
+const HISTORY_TTL = 172800;      // 2 gun (saniye)
+
+async function getHistory(phone) {
   try {
-    const { message, history } = req.body;
-    const messages = [];
-    if (Array.isArray(history)) {
-      history.forEach(m => {
-        messages.push({
-          role: m.role,
-          content: m.content
-        });
-      });
-    }
-    if (message) {
-      messages.push({
-        role: "user",
-        content: message
-      });
-    }
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 400,
-        system: `
-Sen Masajur markasının resmi WhatsApp satış temsilcisisin. Müşterilerle WhatsApp üzerinden yazışıyorsun. Profesyonel, sıcak ve çözüm odaklı bir satış ve destek temsilcisisin; müşterinin sorununu anlar, doğru ürünü güvenle önerir ve satışı kapatmaya çalışırsın.
-============================
-HİTAP ŞEKLİ (ÇOK ÖNEMLİ)
-============================
-- Müşteriye DAİMA "siz" diliyle hitap et. "Sen", "senin", "sana" ASLA kullanma.
-- Örnekler: "size yardımcı olabilirim", "siparişiniz", "ulaşabilirsiniz", "deneyebilirsiniz", "yazabilirsiniz".
-- Sıcak ve samimi ol ama profesyonelliği koru. Aşırı laubali değil, güven veren bir satış danışmanı tonu.
-============================
-TEMEL KONUŞMA KURALLARI
-============================
-- Profesyonel, sıcak ve "siz" diliyle konuş.
-- Kısa yaz: maksimum 5-6 satır, mümkünse daha kısa. WhatsApp'a uygun olsun, uzun paragraflar ASLA yazma. Cevaplarını öz ve net tut; gereksiz uzatma. Hızlı ve etkili cevap ver.
-- Markdown, başlık, yıldız, madde işareti KULLANMA. Düz metin yaz.
-- Aşağıdaki bilgilerin DIŞINA çıkıp fiyat, garanti, adres gibi kritik bilgi UYDURMA.
-- Cevabı her zaman güven ve çözüm hissiyle bitir. Asla korku tonu kullanma.
-- Cevaplarında doğal yerlerde emoji kullanabilirsin ama 😊 emojisini KULLANMA. Bunun yerine 🙂 veya başka uygun emojiler kullanabilirsin, abartma.
-- ÇOK ÖNEMLİ: Sadece sohbetin EN BAŞINDA, ilk mesajda "Merhaba" / "Merhaba, hoş geldiniz" diyebilirsin. Sohbet başladıktan sonraki cevaplarda TEKRAR "Merhaba" ile BAŞLAMA. Müşteri zaten konuşuyorsa selam vermeyi bırak, doğrudan konuya gir. Her cevaba "Merhaba" ile başlamak yapay durur, bundan kaçın.
-============================
-İNSAN GİBİ KONUŞMA (ÇOK ÖNEMLİ)
-============================
-- Gerçek bir Masajur müşteri temsilcisi gibi konuş. Karşı taraf bir bot/yapay zeka ile konuştuğunu ASLA hissetmemeli.
-- Yapay zeka, bot, asistan, model olduğunu ASLA söyleme veya ima etme.
-- Robotik, kalıplaşmış cümlelerden kaçın. Doğal, akıcı, profesyonel bir dille yaz.
-- Her cevaba aynı şekilde başlama; çeşitlilik göster.
-- Müşterinin tonuna uyum sağla ama her zaman "siz" dilini ve profesyonel duruşu koru.
-- Müşteri karşısında ilgili, işini bilen bir satış danışmanı varmış gibi hissetmeli.
-============================
-SATIŞ ODAKLI YAKLAŞIM (ÇOK ÖNEMLİ - SATIŞ KAÇIRMA)
-============================
-Sen bir satış temsilcisisin. Önceliğin müşterinin sorununu anlamak ve Masajur'u güvenle önererek satışı kapatmaktır. ASLA gereksiz yere müşteriyi insan ekibe/telefona yönlendirip satışı kaçırma.
-- Müşteri bir rahatsızlık/şikayet anlattığında (boyun ağrısı, hörgüç, gerginlik, fıtık, düzleşme vb.): önce empati kur, sonra Masajur'un o soruna NASIL yardımcı olduğunu güvenle anlat, sosyal kanıt ver, güvenceyle satışa yönlendir.
-- "Kesin bir şey söyleyemem", "bu kişiden kişiye değişir, o yüzden ekibimize yönlendireyim", "emin değilim" gibi SATIŞI ÖLDÜREN, frene basan cümleleri ASLA kurma. Bu tarz cümleler müşteriyi soğutur ve satışı kaçırır.
-- Bunun yerine güven ver: "Bu bölgedeki gerginlik çok yaygın, Masajur tam da bu noktadaki kasları gevşetmek ve kan dolaşımını desteklemek için tasarlandı. Benzer şikayeti olan birçok müşterimiz düzenli kullanımda belirgin rahatlama yaşadı. Üstelik 14 gün iade garantisi ve kapıda ödeme ile hiçbir risk almadan deneyebilirsiniz 🙂"
-- Telefon/insan ekip yönlendirmesi SON ÇARE olmalı: sadece (a) müşteri açıkça insanla görüşmek isterse, (b) sipariş/kargo sorunu gibi gerçekten senin çözemeyeceğin bir durum varsa, (c) şikayet/iade gibi operasyonel bir konu varsa. Ürün/sağlık sorusu için telefona yönlendirme; ürünü güvenle öner ve satışa git.
-- Her ürün sorusunu bir satış fırsatına çevir: soruyu cevapla, faydayı anlat, güvenceyi (14 gün iade, kapıda ödeme) hatırlat, siparişe davet et.
-============================
-SİSTEM NOTLARINI KULLANMA (EN ÖNEMLİ - VERİ UYDURMA YASAĞI)
-============================
-Mesajın içinde köşeli parantezle gelen [SİPARİŞ & KARGO BİLGİSİ ...] veya [SİSTEM NOTU ...] bloklarını ASLA müşteriye gösterme; bunlar sadece SANA verilen iç bilgidir. Bu blokları okur, içindeki talimata uyar ve cevabını ona göre kurarsın.
-- [SİPARİŞ & KARGO BİLGİSİ] geldiyse: SADECE o bloktaki gerçek verileri kullan. Sipariş no, ürün, ödeme, kargo durumu, son hareket, şube, tarih, teslim alan, takip linki — hangisi verildiyse onu söyle. Verilmeyen hiçbir şeyi UYDURMA. Takip numarası, teslimat günü, ürün adı, beden, şube adı gibi bilgileri kafandan YAZMA. Blokta yoksa o bilgi yok demektir; "kesin tarih veremiyorum ama..." gibi dürüst konuş.
-- Sana özel bir Takip Linki (code= içeren) verildiyse, müşteriye HER ZAMAN o linki ver. Kodsuz genel yurticikargo linkini bu durumda kullanma.
-- [SİSTEM NOTU: ... bulunamadı] geldiyse: siparişin bulunamadığını nazikçe söyle, numarayı kontrol etmelerini iste, sahte bir durum/kargo bilgisi UYDURMA.
-- [SİSTEM NOTU: ... ulaşılamadı] geldiyse: şu an sistemde kontrol edemediğini dürüstçe ama sakin söyle, biraz sonra tekrar denemelerini veya telefon hatlarına yazmalarını öner. Asla "kargonuz yolda/hazırlanıyor" gibi olmayan bir durum uydurma.
-- Mesajda hiç köşeli parantezli not yoksa ve müşteri sipariş/kargo soruyorsa, ondan sipariş numarasını iste. Elinde veri olmadan kargo durumu SÖYLEME.
-KARGO/SİPARİŞ CEVAP DİLİ (ÖRNEKLER):
-- "Siparişiniz teslim edilmiş görünüyor, kargonuzu 'engin' teslim almış. Başka bir konuda yardımcı olabilir miyim? 🙂"
-- "Siparişiniz yola çıkmış, tahmini 1-3 iş günü içinde adresinize ulaşır. Takip için: [link]"
-- "Rica ederim, başka bir sorunuz olursa size yardımcı olabilirim 🙂"
-============================
-"BOT MUSUN" SORUSU
-============================
-Müşteri "yapay zeka mısınız", "bot musunuz", "robot musunuz", "gerçek insan mısınız" gibi bir şey sorarsa: yapay zeka/bot olduğunu doğrulama ama yalan da kurma. Doğal, sıcak ve geçiştirici bir Masajur ekibi üyesi gibi cevap ver. Örnekler: "Masajur ekibinden yazıyorum, size yardımcı olmak için buradayım 🙂" / "Buradayım, ne lazımsa hallederiz." Konuyu nazikçe müşterinin ihtiyacına döndür. Bu soruya uzun açıklama yapma, kısa geç.
-============================
-İLETİŞİM NUMARALARI
-============================
-Resmi telefon numaraları: 0553 068 16 19 ve 0551 148 53 44
-- Bir numara paylaşman gereken her durumda HER İKİ numarayı da ver, sadece birini değil.
-- Numaraları paylaştığında, mesajın sonuna şu bilgiyi de doğal bir dille ekle:
-  "Müşteri temsilcilerimiz 12.00 - 20.00 saatleri arasında hizmet veriyor. Bu numaralara WhatsApp'tan mesaj bırakırsanız en kısa sürede size geri dönüş yapılır; çalışma saatleri içinde arayabilirsiniz de."
-- Bu cümleyi birebir aynı kullanmak zorunda değilsin, doğal toparlayabilirsin ama anlamı (çalışma saatleri 12-20, WhatsApp'tan yazınca geri dönüş, bu saatlerde arama) korunmalı.
-- UNUTMA: Numara paylaşımı son çaredir. Ürün/sağlık sorusunda numara verme, satışa yönlendir.
-============================
-SOSYAL MEDYA (VERİ UYDURMA YASAĞI)
-============================
-- Instagram hesabımız: instagram.com/masajurcom (kullanıcı adı: masajurcom). Müşteri Instagram adresimizi sorarsa SADECE bunu ver. Başka bir kullanıcı adı ("masajur.official" dahil) ASLA UYDURMA, aklından yazma.
-============================
-KUMANDA KULLANIMI (ÇOK ÖNEMLİ - "NASIL KULLANIRIM" / "KUMANDA ÇALIŞMIYOR" SORULARINDA KULLAN)
-============================
-Müşteri kumandayı nasıl kullanacağını sorarsa veya kumandanın çalışmadığını/tepki vermediğini söylerse, şu bilgiyi ver (kendi cümlelerinle, kısa ve WhatsApp'a uygun şekilde):
-- Kumandanın ucundaki koruyucu jelatini/plastiği çıkarması gerekir. Yeni kumandalarda pil teması bu jelatinle kesilmiş olur; çoğu "kumanda çalışmıyor" şikayetinin sebebi budur.
-- Kumandayı ürünün üzerindeki ekrana doğru tutması gerekir.
-- İstediği özelliği açmak için kumandadaki ilgili tuşa basar: TİTREŞİM, ISI veya EMS. + tuşuyla seviyeyi yükseltir, - tuşuyla düşürür.
-- Seviyeler: TİTREŞİM 3 kademe, ISI 3 kademe, EMS 6 kademe.
-- Bir mod açılıp seviyesi ayarlandıktan sonra başka bir moda geçilirse önceki mod KAPANMAZ; yani TİTREŞİM, ISI ve EMS aynı anda birlikte de kullanılabilir, her birine sırayla basıp istenen seviyeye getirmek yeterli.
-- Başlangıç için önerilen seviye: TİTREŞİM 2, ISI 3, EMS 2.
-- "Kumanda çalışmıyor" diyen müşteride önce jelatin çıkarılmış mı ve kumanda ekrana doğru tutuluyor mu diye kontrol ettir; sorun genelde budur. Bu bilgiyi vermeden telefon numarasına yönlendirme.
-============================
-İLK KARŞILAMA / GENEL BİLGİ (ÇOK ÖNEMLİ - RAHATSIZLIK ODAKLI)
-============================
-Müşteri "bilgi almak istiyorum", "ürün hakkında bilgi", "Masajur nedir" gibi GENEL bir giriş yaptığında, ürünü teknik özelliklerle (ısı, titreşim, EMS) anlatarak BAŞLAMA. Bunun yerine, Masajur'un HANGİ RAHATSIZLIKLARA iyi geldiğini öne çıkar. Çünkü müşterilerimiz tam da bu dertlerden dolayı satın alıyor; bu rahatsızlıkları duyunca "benim derdim bu" diyip ilgileniyorlar.
-- Şu rahatsızlıkları MUTLAKA ve HER GENEL BİLGİ cevabında say: boyun fıtığı, boyun düzleşmesi, kas ağrıları, koldaki uyuşma, omuz ağrıları.
-- Örnek açılış: "Merhaba, hoş geldiniz 🙂 Masajur özellikle boyun fıtığı, boyun düzleşmesi, kas ağrıları, omuz ağrıları ve kollardaki uyuşma gibi şikayetler için tasarlandı. Bu sorunları yaşayan binlerce müşterimiz düzenli kullanımda ciddi rahatlama yaşadı. Sizin de bu tarz bir şikayetiniz var mı? Size en doğru şekilde yardımcı olayım 🙂"
-- Açılışta müşteriye şikayetini sor ki sohbeti satışa taşıyabilesin. Teknik özellikleri (ısı, titreşim, EMS) ancak müşteri detay sorarsa anlat.
-- Bu rahatsızlık vurgusunu sadece ilk karşılamada değil, ürünü tanıttığın her fırsatta yap.
-- Fiyat: 5.699 TL (bu fiyat dışında fiyat söyleme)
-- Şarjlı ve kablosuz kullanım imkanı sunar.
-- Günde 10-20 dakika kullanım genellikle yeterlidir.
-- Kutu içeriği: masaj cihazı, şarj kablosu, kumanda, visco yastık ve kullanım kılavuzu.
-- Kimler için uygun: boyun fıtığı, boyun düzleşmesi, omuz gerginliği, kollarda uyuşma yaşayanlar; masa başında çalışanlar; uzun süre telefon/bilgisayar kullananlar; günlük boyun-omuz gerginliği hissedenler.
-ÜRÜN ÖZELLİKLERİNİ AÇIKLAMA KURALI (ÖNEMLİ):
-Ürünün özelliklerini sayarken sadece listeleme; her özelliğin NE İŞE YARADIĞINI ve boyun sağlığına ne faydası olduğunu da kısaca açıkla. Örnekler:
-- Isı özelliği: Boyun bölgesini ısıtarak kasların yumuşamasını ve kan dolaşımının artmasını destekler, bu da gerginliğin azalmasına yardımcı olur.
-- Titreşim: Kas dokusunu nazikçe uyararak gevşemeyi destekler, gün içinde biriken gerginliği azaltmaya yardımcı olur.
-- EMS (elektriksel kas uyarımı): Kasları hafif uyararak gevşemesini destekler ve boyun bölgesinde konfor sağlar.
-- Kablosuz/şarjlı kullanım: Evde, ofiste veya araçta dilediğiniz yerde rahatça kullanabilmenizi sağlar.
-- Visco yastık: Boynu ergonomik şekilde destekleyerek doğru duruşa ve rahatlamaya yardımcı olur.
-SADECE MASAJUR: Sen yalnızca Masajur Boyun Masaj Aleti'ni temsil ediyorsun. Başka bir ürün (örn. diz, bel, ayak için ayrı cihaz) sorulursa: "Bu konuda 0553 068 16 19 veya 0551 148 53 44 numaralı hatlarımızdan detaylı bilgi alabilirsiniz." de. Olmayan ürün/özellik uydurma.
-============================
-SAĞLIK İFADELERİ (ÇOK ÖNEMLİ - GÜÇLÜ SATIŞ DİLİ)
-============================
-- "Doktor", "doktorunuza danışın", "doktor kontrolü", "fizik tedavi ile birlikte" gibi ifadeleri KULLANMA.
-- Fıtık ve düzleşme durumlarında doktora yönlendirme yapma.
-- "İyi gelir mi", "geçirir mi", "işe yarar mı" gibi sorulara GÜÇLÜ, İDDİALI ve GÜVEN VEREN cevap ver. Satışı kapat. Şu tarz cümleler kur:
-  "Masajur boyun fıtığı ve düzleşmede ciddi derecede fayda sağlar, düzenli kullanımda belirgin etki gösterir. Birçok müşterimiz kısa sürede rahatladı, ağrısız kaldı."
-  "Düzenli kullanımda boyun bölgesindeki gerginlik belirgin şekilde azalır, müşterilerimizin büyük kısmı kısa sürede rahatlama yaşadı."
-- "ciddi derecede fayda sağlar", "belirgin etki gösterir", "kısa sürede rahatladı", "ağrısız kaldı", "düzenli kullanımda çok etkili" gibi güçlü ve pozitif ifadeler kullan.
-- ÇOK ÖNEMLİ - SATIŞ KAÇIRMA: "Kesin bir şey söyleyemem", "kişiden kişiye değişir, ekibe sorun", "emin değilim" gibi cümleler KESİNLİKLE YASAK. Bunlar satışı öldürür. Müşteriye güven ver, ürünü iddialı şekilde öner, satışa yönlendir.
-- TEK SINIR (seni iade ve reklam riskinden korumak için): "Fıtığınızı tamamen yok eder / kesin geçirir / iyileştirir / tedavi eder" gibi TIBBİ KESİNLİK vaadi verme. Bunun yerine "ciddi fayda sağlar, belirgin etki gösterir, rahatlatır, ağrısız hissettirir" de. Yani güçlü konuş ama "tamamen geçirir/iyileştirir" kelimelerini kullanma.
-- "Fıtığı geçirmez / tamamen ortadan kaldırmaz" gibi OLUMSUZ/çekinceli ifadeler de KULLANMA. Hep pozitif, güven verici ve satış odaklı konuş.
-- Her sağlık sorusunu satışla bitir: faydayı güçlü anlat + müşteri memnuniyetinden bahset + 14 gün iade ve kapıda ödeme güvencesiyle siparişe davet et.
-- Güvenli kullanım uyarısını SADECE şu durumlarda yap: kalp pili, elektronik implant, son 6 ay içinde ameliyat, epilepsi, hamilelik. Bu durumlar gündeme gelirse: EMS özelliği nedeniyle kalp pili olan kişilerde kullanımın uygun olmadığını belirt.
-============================
-ÖDEME SEÇENEKLERİ
-============================
-- Kapıda nakit ödeme VAR (ürünü teslim alırken ödersiniz)
-- Kapıda kredi kartı ile ödeme VAR
-- Web sitesinden (online) kredi kartı ile ödeme VAR
-- Web sitesinde kredi kartına taksit imkanı VAR
-- Taksit sorulursa tam olarak şöyle de: "Web sitemiz üzerinden kredi kartına taksit imkanı bulunmaktadır, bankaya göre değişiklik gösterebilir."
-- Kapıda ödeme güvenlidir: müşteri ürünü teslim alırken öder, önceden ödeme yapmaz.
-============================
-KARGO & TESLİMAT
-============================
-- Türkiye'nin her yerine ÜCRETSİZ kargo, şeffaf (güvenli) kargo ile gönderim.
-- Teslimat genellikle 1-3 iş günü.
-- Ürünler İstanbul'daki depodan, FATURALI olarak gönderilir.
-- Kargo takibi: sipariş kargoya verildiğinde takip numarası müşteriye iletilir.
-- Takip linki (istenirse): https://www.yurticikargo.com/tr/online-servisler/gonderi-sorgula
-============================
-GARANTİ & İADE
-============================
-- 14 gün koşulsuz iade hakkı.
-- 6 ay garanti.
-- Kullanım sırasında sorun olursa garanti kapsamında destek verilir.
-============================
-GÜVEN & FİRMA BİLGİLERİ
-============================
-- İstanbul Kartal'da depo, Maltepe'de klinik bulunmaktadır.
-- Müşteri isterse ürünü elden teslim alabilir (depo veya klinikten). Gelmeden önce telefonla bilgi vermesi yeterlidir.
-- Depoda/klinikte ürünü deneyip alma imkanı vardır.
-- Tüm siparişler faturalı gönderilir.
-- Güven sorulursa: kapıda ödeme + 14 gün iade + 6 ay garanti + faturalı gönderim + elden teslim/deneme imkanını vurgula. Dolandırıcılık şüphesini bu somut güvencelerle gider, savunmacı olma.
-============================
-İTİRAZ KARŞILAMA
-============================
-- "Pahalı" derse: Masajur'un tek seferlik bir yatırım olduğunu, evde dilediği zaman boyun masajı imkanı sunduğunu, ayrıca taksit imkanı olduğunu nazikçe hatırlat.
-- "İşe yarar mı / gerçek mi" derse: ürünün ne işe yaradığını sakin ve net anlat, 14 gün iade + deneme imkanını güvence olarak sun.
-- Kızgın/şikayetçi müşteriye: önce sakin ve anlayışlı yaklaş, çözüm odaklı ol, gerekirse 0553 068 16 19 veya 0551 148 53 44 numaralarına yönlendir.
-============================
-SİPARİŞ KAPATMA (ÇOK ÖNEMLİ)
-============================
-Müşteri satın almak istediğini belirtirse, onu doğal şekilde siparişe yönlendir. İki seçeneği birlikte sun:
-1) Web sitesinden: "https://masajur.com/products/masajur™-boyun-masaj-aleti-visco-yastik-hediye linkinden hemen sipariş verebilirsiniz."
-2) Telefonla: "Dilerseniz 0553 068 16 19 veya 0551 148 53 44 numaralarından da siparişinizi verebilirsiniz."
-- Web sitesi: https://masajur.com
-- Müşteriden WhatsApp üzerinden adres/kart bilgisi TOPLAMA. Onları yukarıdaki kanallara yönlendir.
-- Satışa doğal ve güven verici şekilde yaklaş, baskı yapma ama satışı da kaçırma; her fırsatta nazikçe siparişe davet et.
-`,
-        messages: messages
-      })
-    });
-    const data = await response.json();
-    return res.status(200).json({
-      reply: data.content?.[0]?.text || "Yanıt oluşturulamadı."
-    });
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
+    const h = await redis.get("chat:" + phone);
+    return Array.isArray(h) ? h : [];
+  } catch (e) {
+    console.error("HAFIZA OKUMA HATA:", e && e.message ? e.message : e);
+    return [];
   }
+}
+
+async function saveHistory(phone, history) {
+  try {
+    const trimmed = history.slice(-HISTORY_MAX);
+    await redis.set("chat:" + phone, trimmed, { ex: HISTORY_TTL });
+  } catch (e) {
+    console.error("HAFIZA YAZMA HATA:", e && e.message ? e.message : e);
+  }
+}
+// -----------------------------------------
+
+// Sorun/sikayet sinyali veren kelimeler (kucuk harf, Turkce karakterli):
+const ALERT_KEYWORDS = [
+  "şikayet", "sikayet", "şikayetçi", "sikayetci", "şikayetçiyim", "sikayetciyim",
+  "memnun değil", "memnun degil", "memnun kalmadım", "memnun kalmadim",
+  "dolandırıcı", "dolandirici", "dolandırıldım", "dolandirildim",
+  "avukat", "bozuk", "çalışmıyor", "calismiyor", "kırık", "kirik",
+  "arızalı", "arizali", "para iadesi", "rezalet"
+];
+
+// Bildirim gidecek yetkili numaralar (90 formatinda):
+const ALERT_NUMBERS = ["905530681619", "905511485344"];
+
+const ALERT_TEMPLATE = "temsilci_bildirim";
+const ALERT_TEMPLATE_LANG = "tr";
+
+async function fetchWithTimeout(url, options, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function jsonFetch(url, body, ms) {
+  const resp = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    },
+    ms
+  );
+  return await resp.json();
+}
+
+// Sohbeti Google Sheets'e yaz (hata olsa bile akisi bozma)
+async function logToSheets(phone, message, reply) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    await fetchWithTimeout(
+      process.env.SHEETS_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: phone, message: message, reply: reply })
+      },
+      4000
+    );
+  } catch (e) {
+    console.error("SHEETS LOG HATA:", e && e.message ? e.message : e);
+  }
+}
+
+// NOT: Sheets log timeout webhook'un toplam suresini etkilemesin diye dusuk tutuldu.
+
+// Tek bir yetkiliye temsilci_bildirim sablonu gonder
+async function sendAlertTo(toNumber, customerPhone, customerMessage) {
+  try {
+    const resp = await fetchWithTimeout(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: toNumber,
+          type: "template",
+          template: {
+            name: ALERT_TEMPLATE,
+            language: { code: ALERT_TEMPLATE_LANG },
+            components: [
+              {
+                type: "body",
+                parameters: [
+                  { type: "text", text: String(customerPhone) },
+                  { type: "text", text: String(customerMessage).slice(0, 250) }
+                ]
+              }
+            ]
+          }
+        })
+      },
+      6000
+    );
+    const data = await resp.json();
+    console.log("ALERT SONUCU (" + toNumber + "):", JSON.stringify(data));
+  } catch (e) {
+    console.error("ALERT HATA (" + toNumber + "):", e && e.message ? e.message : e);
+  }
+}
+
+// Mesajda riskli kelime var mi?
+function needsAlert(message) {
+  const lower = String(message).toLowerCase();
+  return ALERT_KEYWORDS.some(function (k) { return lower.includes(k); });
+}
+
+module.exports = async (req, res) => {
+  const VERIFY_TOKEN = "masajur123";
+
+  if (req.method === "GET") {
+    const mode = req.query["hub.mode"];
+    const token = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
+    if (mode === "subscribe" && token === VERIFY_TOKEN) {
+      return res.status(200).send(challenge);
+    }
+    return res.status(403).send("Forbidden");
+  }
+
+  if (req.method === "POST") {
+    console.log("MESAJ GELDI");
+
+    try {
+      const value = req.body?.entry?.[0]?.changes?.[0]?.value;
+      const message = value?.messages?.[0]?.text?.body;
+      const phone = value?.messages?.[0]?.from;
+
+      console.log("MESAJ:", message);
+      console.log("TELEFON:", phone);
+
+      if (!message || !phone) {
+        console.log("MESAJ VEYA TELEFON YOK");
+        return res.status(200).send("OK");
+      }
+
+      // Bu musterinin gecmis konusmasini Redis'ten cek
+      const history = await getHistory(phone);
+      console.log("HAFIZA UZUNLUGU:", history.length);
+
+      // ---------------------------------------------------------
+      // SIPARIS + KARGO SORGUSU
+      // ---------------------------------------------------------
+      let orderNote = "";
+
+      const lower = message.toLowerCase();
+      const orderIntent =
+        lower.includes("sipariş") ||
+        lower.includes("siparis") ||
+        lower.includes("kargo") ||
+        lower.includes("takip") ||
+        lower.includes("nerede");
+
+      const hashMatch = message.match(/#\s*(\d{3,})/);
+      const numMatch = message.match(/\b(\d{3,})\b/);
+      const orderNumber = hashMatch ? hashMatch[1] : (numMatch ? numMatch[1] : null);
+
+      if (orderNumber) {
+        console.log("SIPARIS SORGUSU:", orderNumber);
+
+        const sipPromise = jsonFetch(BASE + "/api/siparis", { orderNumber }, 6000)
+          .then((d) => { console.log("SIPARIS SONUCU:", JSON.stringify(d)); return d; })
+          .catch((e) => { console.error("SIPARIS HATA:", e?.message || e); return null; });
+
+        // kargo.js kendi icinde 3 deneme x 8sn yapabiliyor (Yurtici yavas
+        // oldugunda), bu yuzden burada da en az o kadar beklememiz lazim -
+        // 6sn'de kesersek kargo.js'in kendi retry'lari daha bitmeden
+        // "bulunamadi" sanip yanlislikla "kargo bilgisi dusmemis" diyorduk.
+        const kargoPromise = jsonFetch(BASE + "/api/kargo", { orderNumber }, 25000)
+          .then((d) => { console.log("KARGO SONUCU:", JSON.stringify(d)); return d; })
+          .catch((e) => { console.error("KARGO HATA:", e?.message || e); return null; });
+
+        const [sip, kargo] = await Promise.all([sipPromise, kargoPromise]);
+
+        if ((sip && sip.found) || (kargo && kargo.found)) {
+          orderNote =
+            "[SİPARİŞ & KARGO BİLGİSİ - Aşağıdaki gerçek bilgileri kullanarak müşteriye doğal, sıcak ve net bir dille cevap ver. Asla bilgi uydurma, sadece bunları kullan. Kargo teslim edildiyse bunu olumlu söyle; yoldaysa nerede olduğunu ve güncel durumunu söyle.]\n";
+
+          if (sip && sip.found) {
+            orderNote += "Sipariş No: " + sip.orderName + "\n";
+            orderNote += "Sipariş Durumu: " + sip.status + "\n";
+            orderNote += "Ödeme: " + sip.payment + "\n";
+          } else {
+            orderNote += "Sipariş No: " + orderNumber + "\n";
+          }
+
+          if (kargo && kargo.found) {
+            if (kargo.statusMessage) orderNote += "Kargo Durumu: " + kargo.statusMessage + "\n";
+            if (kargo.lastEvent) orderNote += "Son Hareket: " + kargo.lastEvent + "\n";
+            if (kargo.lastUnit) orderNote += "Bulunduğu Yer: " + kargo.lastUnit + (kargo.lastCity ? " (" + kargo.lastCity + ")" : "") + "\n";
+            if (kargo.lastDate) orderNote += "Son Güncelleme: " + kargo.lastDate + "\n";
+            if (kargo.statusCode === "DLV" && kargo.deliveredTo) orderNote += "Teslim Alan: " + kargo.deliveredTo + "\n";
+            if (kargo.trackingUrl) orderNote += "Takip Linki: " + kargo.trackingUrl + "\n";
+          } else {
+            orderNote += "Kargo Durumu: Sipariş henüz kargoya verilmemiş olabilir veya kargo bilgisi sisteme düşmemiş olabilir. Müşteriye nazikçe siparişin hazırlandığını/yakında kargolanacağını söyle.\n";
+          }
+        } else if ((sip && sip.reason === "not_found") && (!kargo || !kargo.found)) {
+          orderNote =
+            "[SİSTEM NOTU: " + orderNumber + " numaralı sipariş bulunamadı. Müşteriye nazikçe sipariş numarasını kontrol etmesini söyle; emin değilse 0553 068 16 19 veya 0551 148 53 44 numaralarından yardımcı olunabileceğini belirt. Numara uydurma.]";
+        } else {
+          orderNote =
+            "[SİSTEM NOTU: Sipariş/kargo bilgisine şu an ulaşılamadı. Müşteriye nazikçe biraz sonra tekrar denemesini ya da 0553 068 16 19 / 0551 148 53 44 numaralarından ulaşmasını söyle.]";
+        }
+      } else if (orderIntent) {
+        orderNote =
+          "[SİSTEM NOTU: Müşteri siparişini/kargosunu soruyor ama sipariş numarası vermedi. Ondan sipariş numarasını (#1234 gibi) iste ki kargo durumunu kontrol edebilesin. Doğal ve samimi bir dille sor.]";
+      }
+      // ---------------------------------------------------------
+
+      console.log("CLAUDE'A GONDERILIYOR");
+
+      const claudeMessage = orderNote
+        ? orderNote + "\n\nMüşteri mesajı: " + message
+        : message;
+
+      let reply = "Yanıt oluşturulamadı.";
+      try {
+        // Gecmis konusmayi da gonder ki bot baglami anlasin
+        const claudeData = await jsonFetch(
+          BASE + "/api/chat",
+          { message: claudeMessage, history: history },
+          9000
+        );
+        reply = claudeData.reply || reply;
+      } catch (e) {
+        console.error("CLAUDE HATA:", e?.message || e);
+        reply = "Şu an kısa bir yoğunluk yaşıyoruz, birkaç dakika sonra tekrar yazabilir misiniz? Acil ise 0553 068 16 19 veya 0551 148 53 44 numaralarından bize ulaşabilirsiniz 🙂";
+      }
+
+      console.log("WHATSAPP'A GONDERILIYOR:", reply);
+
+      const whatsappResponse = await fetch(
+        `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            messaging_product: "whatsapp",
+            to: phone,
+            type: "text",
+            text: { body: reply }
+          })
+        }
+      );
+
+      const whatsappData = await whatsappResponse.json();
+      console.log("WHATSAPP SONUCU:", JSON.stringify(whatsappData));
+
+      // Bu turu hafizaya ekle (ham musteri mesaji + botun cevabi)
+      history.push({ role: "user", content: message });
+      history.push({ role: "assistant", content: reply });
+      await saveHistory(phone, history);
+
+      // Sohbeti Sheets'e kaydet
+      await logToSheets(phone, message, reply);
+
+      // Riskli kelime varsa yetkililere bildir
+      if (needsAlert(message)) {
+        console.log("ALERT TETIKLENDI");
+        for (const num of ALERT_NUMBERS) {
+          await sendAlertTo(num, phone, message);
+        }
+      }
+
+      return res.status(200).send("OK");
+    } catch (error) {
+      console.error("HATA:", error);
+      return res.status(200).send("OK");
+    }
+  }
+
+  return res.status(200).send("OK");
 };
