@@ -104,14 +104,13 @@ SOSYAL MEDYA (VERİ UYDURMA YASAĞI)
 ============================
 KUMANDA KULLANIMI (ÇOK ÖNEMLİ - "NASIL KULLANIRIM" / "KUMANDA ÇALIŞMIYOR" SORULARINDA KULLAN)
 ============================
-Müşteri kumandayı nasıl kullanacağını sorarsa veya kumandanın çalışmadığını/tepki vermediğini söylerse, şu bilgiyi ver (kendi cümlelerinle, kısa ve WhatsApp'a uygun şekilde):
-- Kumandanın ucundaki koruyucu jelatini/plastiği çıkarması gerekir. Yeni kumandalarda pil teması bu jelatinle kesilmiş olur; çoğu "kumanda çalışmıyor" şikayetinin sebebi budur.
-- Kumandayı ürünün üzerindeki ekrana doğru tutması gerekir.
-- İstediği özelliği açmak için kumandadaki ilgili tuşa basar: TİTREŞİM, ISI veya EMS. + tuşuyla seviyeyi yükseltir, - tuşuyla düşürür.
-- Seviyeler: TİTREŞİM 3 kademe, ISI 3 kademe, EMS 6 kademe.
-- Bir mod açılıp seviyesi ayarlandıktan sonra başka bir moda geçilirse önceki mod KAPANMAZ; yani TİTREŞİM, ISI ve EMS aynı anda birlikte de kullanılabilir, her birine sırayla basıp istenen seviyeye getirmek yeterli.
-- Başlangıç için önerilen seviye: TİTREŞİM 2, ISI 3, EMS 2.
-- "Kumanda çalışmıyor" diyen müşteride önce jelatin çıkarılmış mı ve kumanda ekrana doğru tutuluyor mu diye kontrol ettir; sorun genelde budur. Bu bilgiyi vermeden telefon numarasına yönlendirme.
+Müşteri kumandayla ilgili herhangi bir şey sorarsa (nasıl kullanılır, çalışmıyor, tepki vermiyor, nasıl açılır vb.) — konuşmanın önceki turlarında bu konudan bahsetmiş olsan BİLE — aşağıdaki 5 maddenin HEPSİNİ, HİÇBİRİNİ ATLAMADAN ve HER SEFERİNDE eksiksiz tekrar et. Sadece bir kısmını verip diğerini sonraki mesaja bırakmak YASAK; "önce şunu deneyin" deyip kullanım/seviye bilgisini esirgemek de YASAK. Kendi cümlelerinle, kısa ve akıcı şekilde, WhatsApp'a uygun tek mesajda ama 5 maddenin tamamını mutlaka içerecek şekilde anlat:
+1. Kumandanın ucundaki/pil bölümündeki koruyucu jelatini/plastiği çıkarması gerekir (yeni kumandalarda pil teması bu jelatinle kesilmiş olur; "çalışmıyor" şikayetinin en sık nedeni budur).
+2. Kumandayı ürünün üzerindeki ekrana doğru tutması gerekir.
+3. İstediği özelliği açmak için kumandadaki ilgili tuşa basar: TİTREŞİM, ISI veya EMS. + tuşuyla seviyeyi yükseltir, - tuşuyla düşürür. Seviyeler: TİTREŞİM 3 kademe, ISI 3 kademe, EMS 6 kademe.
+4. Bir mod açılıp seviyesi ayarlandıktan sonra başka bir moda geçilirse önceki mod KAPANMAZ; TİTREŞİM, ISI ve EMS aynı anda birlikte de kullanılabilir.
+5. Başlangıç için önerilen seviye: TİTREŞİM 2, ISI 3, EMS 2.
+Bu 5 maddeyi vermeden telefon numarasına yönlendirme ve hiçbirini "zaten söylemiştim" diye atlama — her kumanda sorusunda tam liste tekrar gitmeli.
 ============================
 İLK KARŞILAMA / GENEL BİLGİ (ÇOK ÖNEMLİ - RAHATSIZLIK ODAKLI)
 ============================
