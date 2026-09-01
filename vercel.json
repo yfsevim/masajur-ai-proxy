@@ -8,9 +8,6 @@
     },
     "api/webhook-process.js": {
       "maxDuration": 45
-    },
-    "api/kargo.js": {
-      "maxDuration": 30
     }
   }
 }
