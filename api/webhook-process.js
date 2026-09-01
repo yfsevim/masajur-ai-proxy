@@ -437,7 +437,10 @@ module.exports = async (req, res) => {
           if (kargo.statusCode === "DLV" && kargo.deliveredTo) orderNote += "Teslim Alan: " + kargo.deliveredTo + "\n";
           if (kargo.trackingUrl) orderNote += "Takip Linki: " + kargo.trackingUrl + "\n";
         } else {
-          orderNote += "Kargo Durumu: Sipariş henüz kargoya verilmemiş olabilir veya kargo bilgisi sisteme düşmemiş olabilir. Müşteriye nazikçe siparişin hazırlandığını/yakında kargolanacağını söyle.\n";
+          // ONEMLI: Yurtici'den anlik cevap gelmedi diye "henuz kargoya
+          // verilmedi" diye TAHMIN YURUTME - sip.status (yukarida) zaten
+          // dogru bilgiyi veriyor olabilir, onunla celismesin.
+          orderNote += "Kargo Durumu: Şu an Yurtiçi Kargo sisteminden anlık takip bilgisine ulaşılamadı (sistem yoğun olabilir). Yukarıdaki Sipariş Durumu bilgisi geçerlidir; 'henüz kargoya verilmedi' gibi kesin bir iddia kullanma, sadece canlı takip verisinin şu an çekilemediğini söyle.\n";
         }
       } else if ((sip && sip.reason === "not_found") && (!kargo || !kargo.found)) {
         orderNote =
