@@ -34,14 +34,20 @@ const MAX_TRIES = 3;   // kargo.js ile ayni: ayni calisma icinde 3 kere dene
 
 // Keep-Alive baglanti: her denemede yeniden TCP/TLS el sikismasi yapmak
 // yerine baglantiyi acik tutar, gecikmeyi azaltir.
-const ykAgent = new https.Agent({
+// Yurtici bazi IP'leri whitelist'e aliyor; Vercel'in degisken IP'sinden
+// baglanti zaman zaman ETIMEDOUT aliyordu. QuotaGuard Static'in sabit
+// IP'si uzerinden baglanip o IP'leri Yurtici'ye whitelist'e ekletiyoruz.
+const ykTlsOptions = {
   keepAlive: true,
   keepAliveMsecs: 10000,
   maxSockets: 10,
   minVersion: "TLSv1",
   rejectUnauthorized: false,
   ciphers: "DEFAULT:@SECLEVEL=0"
-});
+};
+const ykAgent = process.env.QUOTAGUARDSTATIC_URL
+  ? new HttpsProxyAgent(process.env.QUOTAGUARDSTATIC_URL, ykTlsOptions)
+  : new https.Agent(ykTlsOptions);
 
 // ============================================================
 // DEVRE KESICI (Circuit Breaker) - webhook-process.js ile ORTAK Redis
