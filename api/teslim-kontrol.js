@@ -8,6 +8,7 @@
 //       kendini X saat sonraya yeniden zamanlar -> DLV olunca fatura-kes'i cagirir.
 
 const https = require("https");
+const { HttpsProxyAgent } = require("https-proxy-agent");
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
 
