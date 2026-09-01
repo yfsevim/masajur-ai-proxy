@@ -34,15 +34,17 @@ const YK_PASS = process.env.YK_PASS;
 
 // Keep-Alive baglanti: her denemede yeniden TCP/TLS el sikismasi yapmak
 // yerine baglantiyi acik tutar, gecikmeyi azaltir.
-const ykAgent = new https.Agent({
+const ykTlsOptions = {
   keepAlive: true,
   keepAliveMsecs: 10000,
   maxSockets: 10,
   minVersion: "TLSv1",
   rejectUnauthorized: false,
   ciphers: "DEFAULT:@SECLEVEL=0"
-});
-
+};
+const ykAgent = process.env.QUOTAGUARDSTATIC_URL
+  ? new HttpsProxyAgent(process.env.QUOTAGUARDSTATIC_URL, ykTlsOptions)
+  : new https.Agent(ykTlsOptions);
 // ============================================================
 // DEVRE KESICI (Circuit Breaker) - teslim-kontrol.js ile ORTAK Redis
 // anahtarlari kullanir, cunku ikisi de ayni Yurtici servisine gidiyor.
