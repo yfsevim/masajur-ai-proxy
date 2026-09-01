@@ -46,8 +46,8 @@ const ykAgent = new https.Agent({
 // DEVRE KESICI (Circuit Breaker) - teslim-kontrol.js ile ORTAK Redis
 // anahtarlari kullanir, cunku ikisi de ayni Yurtici servisine gidiyor.
 // ============================================================
-const CB_KEY_FAILS = "yurtici-cb:fails";
-const CB_KEY_OPEN_UNTIL = "yurtici-cb:open-until";
+const CB_KEY_FAILS = "yurtici-cb-canli:fails";
+const CB_KEY_OPEN_UNTIL = "yurtici-cb-canli:open-until";
 const CB_THRESHOLD = 5;
 const CB_COOLDOWN_SECONDS = 600;
 
