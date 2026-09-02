@@ -132,7 +132,8 @@ async function getKargoDetail(orderNumber) {
   return {
     status: raw.operationStatus,                            // HAM Yurtici kodu - loglama icin, fatura kararinda KULLANMA
     gercekTeslim: raw.gercektenMusteriyeTeslimEdildi,        // DOGRU alan: gercekten musteriye mi teslim edildi
-    sirketeIadeEdildi: raw.sirketeIadeEdildi,                // DLV ama aslinda paket bize geri donmus
+    sirketeIadeEdildi: raw.sirketeIadeEdildi,                // DLV ama aslinda paket bize geri donmus/reddedilmis
+    iadeSebebi: raw.rejectReasonExplanation || raw.rejectStatusExplanation || null, // orn. "Alici Kabul Etmedi (...)"
     reasonId: raw.cargoReasonId,          // orn. "AAB"/"MSA"
     reasonExplanation: raw.cargoReasonExplanation,
     branch: raw.deliveryUnitName          // gonderinin bekledigi sube
@@ -303,12 +304,13 @@ async function alreadyFlaggedReturnedToCompany(orderNumber) {
     return !!v;
   } catch (e) { return false; }
 }
-async function isaretleIadeGorulduSirkete(orderNumber) {
+async function isaretleIadeGorulduSirkete(orderNumber, iadeSebebi) {
   try {
     await redis.set("sirkete-iade-gorundu:" + orderNumber, "1", { ex: 90 * 24 * 3600 });
   } catch (e) {}
-  await logTeslimAlarmToSheets(orderNumber, 0,
-    "PAKET MUSTERIYE ULASMADAN SIRKETE IADE EDILDI - FATURA KESILMEDI - MANUEL KONTROL/YENIDEN GONDERIM GEREKEBILIR");
+  const mesaj = "PAKET MUSTERIYE ULASMADAN SIRKETE IADE EDILDI/REDDEDILDI - FATURA KESILMEDI - MANUEL KONTROL/YENIDEN GONDERIM GEREKEBILIR" +
+    (iadeSebebi ? " - Sebep: " + iadeSebebi : "");
+  await logTeslimAlarmToSheets(orderNumber, 0, mesaj);
 }
 
 // ============ TARAMA MODU (guvenlik agi) ============
@@ -467,7 +469,7 @@ async function handleTarama(req, res) {
         // aday listesinden dusmesi icin kalici bir isaret birak (bir kereye
         // mahsus bildirim, tekrar tekrar aynisini dusurmesin).
         const zatenIsaretli = await alreadyFlaggedReturnedToCompany(String(no));
-        if (!zatenIsaretli) await isaretleIadeGorulduSirkete(String(no));
+        if (!zatenIsaretli) await isaretleIadeGorulduSirkete(String(no), detail.iadeSebebi);
         detaylar.push(no + ":SIRKETE-IADE");
       } else if (detail && detail.reasonId && FAILED_REASON_CODES.includes(detail.reasonId)) {
         const phone = normalizeTelefon(order.phone || (order.shipping_address && order.shipping_address.phone));
@@ -553,7 +555,7 @@ module.exports = async (req, res) => {
     if (detail && detail.sirketeIadeEdildi) {
       console.log("TESLIM-KONTROL: paket musteriye ulasmadan sirkete iade edildi, fatura kesilmeyecek:", orderNumber);
       const zatenIsaretli = await alreadyFlaggedReturnedToCompany(orderNumber);
-      if (!zatenIsaretli) await isaretleIadeGorulduSirkete(orderNumber);
+      if (!zatenIsaretli) await isaretleIadeGorulduSirkete(orderNumber, detail.iadeSebebi);
       return res.status(200).send("OK - paket sirkete iade edildi, fatura kesilmedi");
     }
 
