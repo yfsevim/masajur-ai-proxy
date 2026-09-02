@@ -27,7 +27,9 @@ async function getTeslimDurumu(orderNumber) {
   const raw = await yurtici.queryShipment(orderNumber, cb, "YORUM");
   if (!raw) return null;
   return {
-    status: raw.operationStatus,
+    status: raw.operationStatus, // HAM Yurtici kodu - loglama icin, karar icin KULLANMA
+    gercekTeslim: raw.gercektenMusteriyeTeslimEdildi, // DOGRU alan - yorum gonderme karari bunu kullanmali
+    sirketeIadeEdildi: raw.sirketeIadeEdildi,
     reasonId: raw.cargoReasonId,
     reasonExplanation: raw.cargoReasonExplanation
   };
@@ -117,14 +119,23 @@ module.exports = async (req, res) => {
     const detail = await getTeslimDurumu(orderNumber);
     console.log("YORUM TESLIM DURUMU:", orderNumber, "->", JSON.stringify(detail));
 
-    if (detail && detail.status && detail.status !== "DLV") {
-      const not = detail.reasonId ? detail.status + "/" + detail.reasonId : detail.status;
+    if (detail && detail.status && !detail.gercekTeslim) {
+      // 2026-09-02 DUZELTME: eskiden burada "detail.status !== 'DLV'" kontrol
+      // ediliyordu. Ama Yurtici, paket musteriye ulasmadan bize (sirkete)
+      // iade oldugunda da operationStatus="DLV" donduruyor - bu yuzden
+      // sadece DLV olup olmadigina degil, gercekten musteriye teslim edilip
+      // edilmedigine (gercekTeslim) bakiyoruz. Boylece sirkete iade olan
+      // siparislere de (once DLV oldugu icin gecen) artik yanlislikla
+      // "yorum yapar misiniz" mesaji GITMIYOR.
+      const not = detail.sirketeIadeEdildi
+        ? "SIRKETE-IADE (musteriye ulasmadi)"
+        : (detail.reasonId ? detail.status + "/" + detail.reasonId : detail.status);
       console.log("YORUM: siparis teslim edilmemis (" + not + "), yorum istegi ATLANIYOR:", orderNumber);
       await logYorumToSheets(phone, name, orderNumber, "ATLANDI: teslim edilmemis (" + not + ")");
       return res.status(200).send("OK - teslim edilmemis, yorum istegi gonderilmedi");
     }
 
-    // detail null (durum bilinmiyor) VEYA detail.status === "DLV" -> gonder
+    // detail null (durum bilinmiyor) VEYA detail.gercekTeslim === true -> gonder
     const waResp = await fetchWithTimeout(
       `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
       {
