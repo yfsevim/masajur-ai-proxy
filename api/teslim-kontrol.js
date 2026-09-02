@@ -3,7 +3,7 @@
 // Henuz teslim edilmediyse (DLV degilse) belirli bir sure sonra kendini
 // yeniden zamanlar. Teslim edildiyse fatura-kes.js'i tetikler.
 //
-// Akis: fulfillment.js (kargoya verildi webhook'u) -> ilk teslim-kontrol
+// Akis: fatura-baslat.js (kargoya verildi webhook'u) -> ilk teslim-kontrol
 //       gorevini QStash'e birakir -> bu dosya calisir -> DLV degilse
 //       kendini X saat sonraya yeniden zamanlar -> DLV olunca fatura-kes'i cagirir.
 //
@@ -14,6 +14,20 @@
 //
 // Yurtici Kargo sorgusu artik ../lib/yurtici.js'deki ORTAK istemciyi kullanir
 // (webhook-process.js, teslim-kontrol.js ve yorum.js ayni koddan besleniyor).
+//
+// GUVENLIK AGI (TARAMA MODU) - 2026-09-02'de eklendi:
+// fatura-baslat.js'in Shopify webhook'u ara sira bir siparisi hic
+// tetiklemeyebiliyor (webhook'lar %100 garantili degildir). Bu durumda
+// yukaridaki normal akis o siparise HIC dokunmuyor - ne fatura ne hata
+// ne alarm, hicbir iz kalmiyor (gercek bir vaka: #12359 - teslim alinmis,
+// odemesi tahsil edilmis ama fatura akisina hic girmemis).
+// Bu riski ortadan kaldirmak icin: GET ?mod=tarama&secret=... ile
+// cagrildiginda, Shopify'dan kargoya verilmis ama "fatura-kesildi"
+// etiketi olmayan siparisleri kucuk gruplar halinde tarar, Yurtici'de
+// gercekten teslim edilmis olanlari fatura-kes.js'e yonlendirir. Duzenli
+// araliklarla (orn. QStash Schedule ile her 30 dakikada bir) cagrilmasi
+// onerilir - hem gecmis boslugu kapatir hem ileride ayni sorun olursa
+// kendiliginden telafi eder.
 
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
@@ -213,7 +227,188 @@ async function logTeslimAlarmToSheets(orderNumber, deneme) {
   }
 }
 
+// ============ TARAMA MODU (guvenlik agi) ============
+
+const TARAMA_API_VERSION = "2026-04"; // fatura-kes.js ile ayni
+const TARAMA_BATCH_SIZE = 10;         // Vercel zaman asimina takilmamak icin bir seferde en fazla bu kadar siparis
+// BILINCLI KARAR (2026-09-02): sadece YENI siparislerin arada kaybolmamasi
+// icin var, GECMISE dokunmuyor. Gecmis eksik faturalari kullanici manuel
+// hallediyor. Pencere kucuk tutuluyor ki tarama fiziksel olarak eski
+// siparislere hic erisemesin (Redis bayragi/Shopify etiketi ne olursa olsun).
+const TARAMA_LOOKBACK_DAYS = 15;
+const TARAMA_MIN_AGE_HOURS = 30;      // normal akisa (1 gun sonra ilk kontrol) yetecek kadar sure taninsin
+
+function normalizeTelefon(raw) {
+  if (!raw) return "";
+  let d = String(raw).replace(/[^0-9]/g, "");
+  if (!d) return "";
+  if (d.startsWith("0")) d = "90" + d.slice(1);
+  if (!d.startsWith("90")) d = "90" + d;
+  return d;
+}
+
+// Shopify'dan son N gunde olusturulmus tum siparisleri ceker (sayfalama dahil).
+async function fetchTumSiparisler(gunler) {
+  const minDate = new Date(Date.now() - gunler * 24 * 3600 * 1000).toISOString();
+  const fields = "id,name,phone,tags,cancelled_at,customer,shipping_address,fulfillments,created_at";
+  let url = `https://${process.env.SHOPIFY_STORE}/admin/api/${TARAMA_API_VERSION}/orders.json` +
+    `?status=any&created_at_min=${encodeURIComponent(minDate)}&limit=250&fields=${fields}`;
+  let tumu = [];
+  let sayfa = 0;
+  while (url && sayfa < 5) { // guvenlik siniri: en fazla 5 sayfa (~1250 siparis)
+    sayfa++;
+    const r = await fetchWithTimeout(url, {
+      headers: { "X-Shopify-Access-Token": process.env.SHOPIFY_TOKEN, "Content-Type": "application/json" }
+    }, 15000);
+    if (!r.ok) {
+      console.error("TARAMA: Shopify siparis listesi alinamadi, HTTP", r.status);
+      break;
+    }
+    const data = await r.json().catch(() => ({}));
+    if (Array.isArray(data.orders)) tumu = tumu.concat(data.orders);
+    const link = (r.headers.get && (r.headers.get("link") || r.headers.get("Link"))) || null;
+    const match = link && link.match(/<([^>]+)>;\s*rel="next"/);
+    url = match ? match[1] : null;
+  }
+  return tumu;
+}
+
+// Taramaya aday mi: iptal edilmemis, zaten faturalanmamis, en az bir kargoya
+// verilmis "fulfillment" kaydi var ve yeterince eski (normal akisa sans taninmis).
+function taramaAdayiMi(order, simdiMs) {
+  if (order.cancelled_at) return false;
+  const tags = order.tags ? order.tags.split(",").map(t => t.trim()) : [];
+  if (tags.includes("fatura-kesildi")) return false;
+  if (!order.fulfillments || order.fulfillments.length === 0) return false;
+  const fulfillment = order.fulfillments[0];
+  const sevkTarihi = fulfillment && fulfillment.created_at ? new Date(fulfillment.created_at) : new Date(order.created_at);
+  const yasSaat = (simdiMs - sevkTarihi.getTime()) / 3600000;
+  return yasSaat >= TARAMA_MIN_AGE_HOURS;
+}
+
+async function taramaCursorOku() {
+  try {
+    const v = await redis.get("tarama-cursor");
+    return v ? Number(v) : 0;
+  } catch (e) { return 0; }
+}
+async function taramaCursorYaz(v) {
+  try { await redis.set("tarama-cursor", String(v)); } catch (e) {}
+}
+
+async function logTaramaOzetToSheets(ozet) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    await fetchWithTimeout(process.env.SHEETS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "tarama", status: ozet })
+    }, 8000);
+  } catch (e) {}
+}
+
+async function handleTarama(req, res) {
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) {
+    console.error("TARAMA: gecersiz secret");
+    return res.status(401).send("Unauthorized");
+  }
+  if (!process.env.SHOPIFY_STORE || !process.env.SHOPIFY_TOKEN) {
+    console.error("TARAMA: SHOPIFY_STORE/SHOPIFY_TOKEN tanimli degil");
+    return res.status(200).send("OK - shopify bilgisi yok, tarama yapilamadi");
+  }
+
+  try {
+    const simdi = Date.now();
+    const tumSiparisler = await fetchTumSiparisler(TARAMA_LOOKBACK_DAYS);
+
+    let adaylar = tumSiparisler
+      .filter(o => taramaAdayiMi(o, simdi))
+      .map(o => ({ order: o, no: parseInt(String(o.name).replace(/[^0-9]/g, ""), 10) }))
+      .filter(x => !isNaN(x.no))
+      .sort((a, b) => a.no - b.no);
+
+    // Ek guvenlik: Shopify etiketi eksik olsa bile Redis'teki kalici
+    // "faturalandi" bayragini da kontrol et - fatura-kes.js'teki ayni anahtar
+    // (bkz. #12642 vakasi: Shopify etiketleme sessizce basarisiz olabiliyordu).
+    if (adaylar.length > 0) {
+      try {
+        const flags = await redis.mget(...adaylar.map(x => "fatura-kesildi:" + x.no));
+        adaylar = adaylar.filter((x, i) => !flags[i]);
+      } catch (e) {
+        console.error("TARAMA: Redis mget hatasi, filtreleme atlandi:", e && e.message ? e.message : e);
+      }
+    }
+
+    console.log("TARAMA: toplam siparis:", tumSiparisler.length, "aday:", adaylar.length);
+
+    if (adaylar.length === 0) {
+      await logTaramaOzetToSheets("0 aday bulundu (hepsi faturali/iptal/cok yeni) - toplam bakilan: " + tumSiparisler.length);
+      return res.status(200).send("OK - aday yok");
+    }
+
+    const cursor = await taramaCursorOku();
+    let baslangic = adaylar.findIndex(x => x.no > cursor);
+    if (baslangic === -1) baslangic = 0; // listenin sonuna gelindi, basa don
+
+    const parti = adaylar.slice(baslangic, baslangic + TARAMA_BATCH_SIZE);
+    let faturaSayisi = 0, bildirimSayisi = 0, kontrolSayisi = 0;
+    const detaylar = [];
+
+    for (const { order, no } of parti) {
+      kontrolSayisi++;
+      const detail = await getKargoDetail(String(no));
+      console.log("TARAMA:", no, "->", JSON.stringify(detail));
+
+      if (detail && detail.status === "DLV") {
+        await triggerFatura(String(no));
+        faturaSayisi++;
+        detaylar.push(no + ":FATURA");
+      } else if (detail && detail.reasonId && FAILED_REASON_CODES.includes(detail.reasonId)) {
+        const phone = normalizeTelefon(order.phone || (order.shipping_address && order.shipping_address.phone));
+        if (phone) {
+          const already = await alreadyNotifiedFailed(String(no));
+          if (!already) {
+            const musteriAdi =
+              (order.customer && ((order.customer.first_name || "") + " " + (order.customer.last_name || "")).trim()) ||
+              (order.shipping_address && order.shipping_address.name) ||
+              "Merhaba";
+            await sendTeslimBasarisizMesaji(phone, musteriAdi, String(no), detail.branch);
+            await markNotifiedFailed(String(no));
+            bildirimSayisi++;
+            detaylar.push(no + ":BILDIRIM(" + detail.reasonId + ")");
+          }
+        }
+      } else {
+        detaylar.push(no + ":" + (detail ? detail.status || "BILINMIYOR" : "SORGU-BASARISIZ"));
+      }
+      await new Promise(r => setTimeout(r, 250)); // Yurtici/Shopify'i yormayalim
+    }
+
+    const sonIndex = baslangic + TARAMA_BATCH_SIZE;
+    const yeniCursor = sonIndex >= adaylar.length ? 0 : parti[parti.length - 1].no;
+    await taramaCursorYaz(yeniCursor);
+
+    const ozet = kontrolSayisi + " siparis kontrol edildi, " + faturaSayisi + " fatura tetiklendi, " +
+      bildirimSayisi + " teslim-basarisiz bildirimi gonderildi (toplam aday: " + adaylar.length + ") - " +
+      detaylar.join(", ");
+    console.log("TARAMA OZET:", ozet);
+    await logTaramaOzetToSheets(ozet);
+
+    return res.status(200).send("OK - " + ozet);
+  } catch (error) {
+    console.error("TARAMA HATA:", error && error.message ? error.message : error);
+    return res.status(200).send("OK - tarama hatasi: " + (error && error.message ? error.message : error));
+  }
+}
+
+// ============ /TARAMA MODU ============
+
 module.exports = async (req, res) => {
+  if (req.method === "GET" && req.query && req.query.mod === "tarama") {
+    return handleTarama(req, res);
+  }
+
   if (req.method !== "POST") return res.status(200).send("OK");
 
   const secret = req.query && req.query.secret;
