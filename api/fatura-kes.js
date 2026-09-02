@@ -92,24 +92,38 @@ async function tagOrderAsInvoiced(order) {
   }, 8000);
 }
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Muhasebe kaydi oldugu icin Sheets'e yazarken 3 kere dener (1sn, 2sn ara ile).
+// NOT: Bu fonksiyon basarisiz olsa bile faturanin kendisi (Mysoft + Shopify
+// "fatura-kesildi" etiketi) zaten kesilmis ve guvende olur - burada sadece
+// Sheets'teki KAYIT satirinin kaybolmasini onluyoruz.
 async function logFaturaToSheets(orderNumber, tip, aliciAdi, tutar, status) {
-  try {
-    if (!process.env.SHEETS_URL) return;
-    await fetchWithTimeout(process.env.SHEETS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "fatura",
-        orderNumber: orderNumber,
-        faturaTipi: tip,
-        aliciAdi: aliciAdi,
-        tutar: tutar,
-        status: status
-      })
-    }, 8000);
-  } catch (e) {
-    console.error("FATURA SHEETS LOG HATA:", e && e.message ? e.message : e);
+  if (!process.env.SHEETS_URL) return;
+  const body = JSON.stringify({
+    type: "fatura",
+    orderNumber: orderNumber,
+    faturaTipi: tip,
+    aliciAdi: aliciAdi,
+    tutar: tutar,
+    status: status
+  });
+  const MAX_TRIES = 3;
+  for (let i = 1; i <= MAX_TRIES; i++) {
+    try {
+      const resp = await fetchWithTimeout(process.env.SHEETS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body
+      }, 8000);
+      if (resp.ok) return;
+      console.error("FATURA SHEETS LOG: HTTP " + resp.status + " (deneme " + i + "/" + MAX_TRIES + ")");
+    } catch (e) {
+      console.error("FATURA SHEETS LOG HATA (deneme " + i + "/" + MAX_TRIES + "):", e && e.message ? e.message : e);
+    }
+    if (i < MAX_TRIES) await sleep(1000 * i);
   }
+  console.error("FATURA SHEETS LOG: " + MAX_TRIES + " denemede de basarisiz, kayit Sheets'e dusmedi:", orderNumber);
 }
 
 const MYSOFT_API_BASE_URL = process.env.MYSOFT_API_BASE_URL || "https://edocumentapi.mysoft.com.tr";
