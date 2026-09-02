@@ -6,12 +6,21 @@
 //
 // Mysoft.EDocumentApi (v8) OpenAPI semasina gore yazildi.
 // Kullanilan endpoint: POST /api/InvoiceOutbox/invoiceOutbox (Giden Fatura Ekleme)
+//
+// 2026-09-02 DUZELTME: Shopify'a "fatura-kesildi" etiketini yazan istek
+// (PUT) daha once sonucu hic kontrol etmiyordu - basarisiz olsa bile
+// sessizce kayboluyordu (gercek vaka: #12642, fatura basariyla kesildi
+// ama Shopify'da etiket hic gorunmedi). Artik: (1) bu istegin sonucu
+// kontrol edilip loglaniyor, (2) "zaten faturalandi mi" kontrolu ARTIK
+// Shopify etiketine ek olarak Redis'teki KALICI bir bayraga da bakiyor -
+// boylece Shopify etiketleme basarisiz olsa bile mukerrer fatura kesilmez.
 
 const SECRET = "masajur_yakkoholding_2128";
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
 const API_VERSION = "2026-04";
 const INVOICED_TAG = "fatura-kesildi";
+const FATURALANDI_REDIS_PREFIX = "fatura-kesildi:"; // Shopify etiketinden BAGIMSIZ, kalici kayit
 
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
@@ -30,6 +39,24 @@ async function releaseFaturaLock(orderNumber) {
   try {
     await redis.del("fatura-lock:" + orderNumber);
   } catch (e) {}
+}
+
+// Redis'teki kalici "faturalandi" bayragi - Shopify etiketinden bagimsiz,
+// Shopify'a yazma basarisiz olsa bile bu kayit dogru kalir.
+async function faturalandiMi(orderNumber) {
+  try {
+    const v = await redis.get(FATURALANDI_REDIS_PREFIX + orderNumber);
+    return !!v;
+  } catch (e) {
+    return false; // Redis erisilemezse guvenli taraf: eskisi gibi devam et (Shopify etiketine bak)
+  }
+}
+async function isaretleFaturalandi(orderNumber) {
+  try {
+    await redis.set(FATURALANDI_REDIS_PREFIX + orderNumber, "1"); // suresiz, hic silinmez
+  } catch (e) {
+    console.error("FATURA-KES: Redis 'faturalandi' bayragi yazilamadi:", orderNumber, e && e.message ? e.message : e);
+  }
 }
 
 const VKN_TCKN_ATTRIBUTE_NAMES = [
@@ -80,50 +107,47 @@ async function getShopifyOrder(orderNumber) {
   return order;
 }
 
+// DUZELTME: artik PUT istegin sonucunu kontrol edip logluyor - once sessizce
+// basarisiz olabiliyordu (gercek vaka: #12642).
 async function tagOrderAsInvoiced(order) {
   const existingTags = order.tags ? order.tags.split(",").map(t => t.trim()).filter(Boolean) : [];
   if (existingTags.includes(INVOICED_TAG)) return;
   existingTags.push(INVOICED_TAG);
   const url = `https://${SHOPIFY_STORE}/admin/api/${API_VERSION}/orders/${order.id}.json`;
-  await fetchWithTimeout(url, {
-    method: "PUT",
-    headers: { "X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json" },
-    body: JSON.stringify({ order: { id: order.id, tags: existingTags.join(", ") } })
-  }, 8000);
+  try {
+    const r = await fetchWithTimeout(url, {
+      method: "PUT",
+      headers: { "X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ order: { id: order.id, tags: existingTags.join(", ") } })
+    }, 8000);
+    if (!r.ok) {
+      const errText = await r.text().catch(() => "");
+      console.error("FATURA-KES: Shopify etiketleme basarisiz HTTP " + r.status + ": " + errText.slice(0, 300));
+    }
+  } catch (e) {
+    console.error("FATURA-KES: Shopify etiketleme HATA:", e && e.message ? e.message : e);
+  }
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// Muhasebe kaydi oldugu icin Sheets'e yazarken 3 kere dener (1sn, 2sn ara ile).
-// NOT: Bu fonksiyon basarisiz olsa bile faturanin kendisi (Mysoft + Shopify
-// "fatura-kesildi" etiketi) zaten kesilmis ve guvende olur - burada sadece
-// Sheets'teki KAYIT satirinin kaybolmasini onluyoruz.
 async function logFaturaToSheets(orderNumber, tip, aliciAdi, tutar, status) {
-  if (!process.env.SHEETS_URL) return;
-  const body = JSON.stringify({
-    type: "fatura",
-    orderNumber: orderNumber,
-    faturaTipi: tip,
-    aliciAdi: aliciAdi,
-    tutar: tutar,
-    status: status
-  });
-  const MAX_TRIES = 3;
-  for (let i = 1; i <= MAX_TRIES; i++) {
-    try {
-      const resp = await fetchWithTimeout(process.env.SHEETS_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: body
-      }, 8000);
-      if (resp.ok) return;
-      console.error("FATURA SHEETS LOG: HTTP " + resp.status + " (deneme " + i + "/" + MAX_TRIES + ")");
-    } catch (e) {
-      console.error("FATURA SHEETS LOG HATA (deneme " + i + "/" + MAX_TRIES + "):", e && e.message ? e.message : e);
+  try {
+    if (!process.env.SHEETS_URL) return;
+    const body = JSON.stringify({ type: "fatura", orderNumber, faturaTipi: tip, aliciAdi, tutar, status });
+    const MAX_TRIES = 3;
+    for (let i = 1; i <= MAX_TRIES; i++) {
+      try {
+        const resp = await fetchWithTimeout(process.env.SHEETS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body }, 8000);
+        if (resp.ok) return;
+        console.error("FATURA SHEETS LOG: HTTP " + resp.status + " (deneme " + i + "/" + MAX_TRIES + ")");
+      } catch (e) {
+        console.error("FATURA SHEETS LOG HATA (deneme " + i + "/" + MAX_TRIES + "):", e && e.message ? e.message : e);
+      }
+      if (i < MAX_TRIES) await new Promise(r => setTimeout(r, 1000 * i));
     }
-    if (i < MAX_TRIES) await sleep(1000 * i);
+    console.error("FATURA SHEETS LOG: 3 denemede de basarisiz, kayit Sheets'e dusmedi:", orderNumber);
+  } catch (e) {
+    console.error("FATURA SHEETS LOG HATA:", e && e.message ? e.message : e);
   }
-  console.error("FATURA SHEETS LOG: " + MAX_TRIES + " denemede de basarisiz, kayit Sheets'e dusmedi:", orderNumber);
 }
 
 const MYSOFT_API_BASE_URL = process.env.MYSOFT_API_BASE_URL || "https://edocumentapi.mysoft.com.tr";
@@ -347,7 +371,55 @@ function buildFaturaPayload(order, faturaTipi, vkn, vergiDairesi, unvan) {
   };
 }
 
+// ============ BIR KEREYE MAHSUS BACKFILL (2026-09-02) ============
+// NOT: Tarama modu artik sadece son 15 gune bakiyor (gecmise kasitli olarak
+// dokunmuyor - kullanici gecmis eksik faturalari kendisi manuel halledecek).
+// Bu backfill de sadece o pencereyle uyumlu olacak sekilde SON 15 GUNDE
+// Sheets'te "KESILDI OK" gorunen siparisleri isaretliyor - amaci, tarama ilk
+// calistiginda bu YAKIN GECMIS siparisleri (Shopify etiketi yazilmamis olsa
+// bile, bkz. #12642 vakasi) yanlislikla "eksik" sanip yeniden faturalamasini
+// onlemek. GET ?mod=backfill ile bir KEZ calistirilmasi yeterli, tekrar
+// calistirmak zararsizdir.
+const BACKFILL_SIPARISLER = [
+  12094, 12099, 12116, 12129, 12131, 12139, 12142, 12144, 12157, 12168, 12172, 12179, 12180, 12182, 12189,
+  12195, 12199, 12202, 12235, 12239, 12252, 12255, 12269, 12273, 12274, 12277, 12279, 12282, 12286, 12291,
+  12308, 12324, 12328, 12338, 12367, 12369, 12371, 12376, 12377, 12378, 12379, 12381, 12382, 12383, 12385,
+  12386, 12387, 12388, 12389, 12390, 12392, 12393, 12394, 12395, 12396, 12397, 12398, 12399, 12400, 12401,
+  12403, 12404, 12405, 12406, 12407, 12408, 12410, 12411, 12413, 12414, 12416, 12418, 12419, 12420, 12421,
+  12422, 12423, 12424, 12425, 12426, 12428, 12429, 12430, 12431, 12432, 12433, 12436, 12437, 12438, 12440,
+  12441, 12442, 12444, 12445, 12446, 12448, 12451, 12452, 12453, 12454, 12455, 12456, 12457, 12458, 12460,
+  12461, 12462, 12464, 12465, 12466, 12467, 12468, 12469, 12470, 12471, 12472, 12473, 12475, 12476, 12477,
+  12479, 12481, 12482, 12483, 12484, 12486, 12487, 12488, 12489, 12490, 12492, 12495, 12496, 12497, 12498,
+  12499, 12500, 12505, 12507, 12509, 12515, 12516, 12519, 12520, 12522, 12523, 12526, 12527, 12534, 12537,
+  12538, 12542, 12543, 12544, 12546, 12547, 12549, 12550, 12556, 12557, 12569, 12570, 12571, 12572, 12573,
+  12575, 12576, 12577, 12578, 12580, 12581, 12582, 12588, 12589, 12591, 12592, 12594, 12596, 12597, 12598,
+  12599, 12600, 12601, 12602, 12605, 12606, 12607, 12608, 12609, 12610, 12612, 12613, 12616, 12617, 12618,
+  12621, 12622, 12623, 12626, 12628, 12631, 12632, 12633, 12634, 12637, 12638, 12639, 12640, 12641, 12642,
+  12644, 12645, 12646, 12647, 12648, 12649, 12650, 12652, 12653, 12655, 12657, 12658, 12659, 12660, 12662,
+  12664, 12666, 12667, 12669, 12670, 12674, 12682, 12685, 12687, 12692, 12694
+];
+
+async function handleBackfill(req, res) {
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) {
+    console.error("FATURA-KES BACKFILL: gecersiz secret");
+    return res.status(401).send("Unauthorized");
+  }
+  let sayac = 0;
+  for (const no of BACKFILL_SIPARISLER) {
+    await isaretleFaturalandi(String(no));
+    sayac++;
+  }
+  console.log("FATURA-KES BACKFILL: " + sayac + " siparis Redis'te faturalandi olarak isaretlendi");
+  return res.status(200).send("OK - " + sayac + " siparis isaretlendi");
+}
+// ============ /BACKFILL ============
+
 module.exports = async (req, res) => {
+  if (req.method === "GET" && req.query && req.query.mod === "backfill") {
+    return handleBackfill(req, res);
+  }
+
   if (req.method !== "POST") return res.status(200).send("OK");
 
   const secret = req.query && req.query.secret;
@@ -367,6 +439,14 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: true, reason: "locked_duplicate" });
     }
 
+    // DUZELTME: Shopify etiketine ek olarak Redis'teki kalici bayraga da bak -
+    // Shopify etiketleme gecmiste sessizce basarisiz olabiliyordu (#12642 vakasi).
+    if (await faturalandiMi(orderNumber)) {
+      console.log("FATURA-KES: Redis kaydina gore zaten faturali, atlaniyor:", orderNumber);
+      await releaseFaturaLock(orderNumber);
+      return res.status(200).json({ ok: true, reason: "already_invoiced_redis" });
+    }
+
     const order = await getShopifyOrder(orderNumber);
     if (!order) {
       console.error("FATURA-KES: siparis bulunamadi:", orderNumber);
@@ -377,7 +457,8 @@ module.exports = async (req, res) => {
 
     const existingTags = order.tags ? order.tags.split(",").map(t => t.trim()) : [];
     if (existingTags.includes(INVOICED_TAG)) {
-      console.log("FATURA-KES: zaten faturali, atlaniyor:", orderNumber);
+      console.log("FATURA-KES: zaten faturali (Shopify etiketi), atlaniyor:", orderNumber);
+      await isaretleFaturalandi(orderNumber); // Redis kaydi da eksikse tamamla
       await releaseFaturaLock(orderNumber);
       return res.status(200).json({ ok: true, reason: "already_invoiced" });
     }
@@ -400,6 +481,7 @@ module.exports = async (req, res) => {
     const sonuc = await mysoftFaturaOlustur(payload);
 
     if (sonuc.basarili) {
+      await isaretleFaturalandi(orderNumber); // Redis'teki kalici kayit - once bu, Shopify'a ne olursa olsun garanti
       await tagOrderAsInvoiced(order);
       await logFaturaToSheets(orderNumber, faturaTipi, payload.aliciUnvanAdSoyad, payload.genelToplam,
         "KESILDI OK - Fatura No: " + (sonuc.faturaNo || "-") + " ETTN: " + (sonuc.faturaEttn || "-"));
