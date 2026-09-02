@@ -136,10 +136,28 @@ async function logFaturaToSheets(orderNumber, tip, aliciAdi, tutar, status) {
     const MAX_TRIES = 3;
     for (let i = 1; i <= MAX_TRIES; i++) {
       try {
-        const resp = await fetchWithTimeout(process.env.SHEETS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body }, 8000);
+        // 2026-09-02 DUZELTME (12384/12409/12415 Sheets'te 2-3 kez gorundugu
+        // vaka): eskiden 8000ms'de zaman asimi olursa "basarisiz" sayilip
+        // AYNI satir tekrar gonderiliyordu. Ama Google Apps Script tarafinda
+        // satir EKLEME islemi cogu zaman zaten TAMAMLANMIS oluyor, sadece HTTP
+        // cevabi gecikiyor - yani zaman asimi "basarisiz oldu" anlamina
+        // gelmez, "cevabi goremedim" anlamina gelir. Bunu "basarisiz" sayip
+        // tekrar denemek, ayni satirin Sheets'e 2-3 kez yazilmasina yol
+        // aciyordu (fatura numarasi/ETTN hep AYNIYDI - yani mukerrer fatura
+        // KESILMEDI, sadece log satiri mukerrer yazildi - yine de kafa
+        // karistirici ve yanlis). Zaman asimini biraz uzattik VE zaman
+        // asiminda ARTIK TEKRAR DENEMIYORUZ - sadece net baglanti hatalarinda
+        // (DNS, ag koptu vb.) veya sunucunun acikca hata dondurdugu (HTTP
+        // 4xx/5xx) durumlarda tekrar deniyoruz.
+        const resp = await fetchWithTimeout(process.env.SHEETS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body }, 15000);
         if (resp.ok) return;
         console.error("FATURA SHEETS LOG: HTTP " + resp.status + " (deneme " + i + "/" + MAX_TRIES + ")");
       } catch (e) {
+        const zamanAsimiMi = e && (e.name === "AbortError" || /abort/i.test(e.message || ""));
+        if (zamanAsimiMi) {
+          console.error("FATURA SHEETS LOG: zaman asimi - Sheets tarafinda islem TAMAMLANMIS OLABILIR, mukerrer kayit riski yuzunden TEKRAR DENENMIYOR:", orderNumber);
+          return;
+        }
         console.error("FATURA SHEETS LOG HATA (deneme " + i + "/" + MAX_TRIES + "):", e && e.message ? e.message : e);
       }
       if (i < MAX_TRIES) await new Promise(r => setTimeout(r, 1000 * i));
