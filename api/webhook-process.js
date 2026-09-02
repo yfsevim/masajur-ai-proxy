@@ -5,9 +5,9 @@
 // kuralindan bagimsiz olarak, Yurtici yavas oldugunda bile rahat calisabilsin
 // (vercel.json'da bu fonksiyona 45sn suresi tanimli).
 //
-// Yurtici Kargo sorgusu (eskiden ayri api/kargo.js dosyasiydi) buraya
-// dogrudan gomuldu - hem bir HTTP round-trip'i ortadan kaldirir hem de
-// Vercel Hobby'nin 12 fonksiyon sinirinda yer acar.
+// Yurtici Kargo sorgusu artik ../lib/yurtici.js'deki ORTAK istemciyi kullanir
+// (webhook-process.js, teslim-kontrol.js ve yorum.js ayni koddan besleniyor -
+// QuotaGuard proxy + devre kesici + retry mantigi tek yerde).
 //
 // + Her mesaj Google Sheets'e kaydedilir (SHEETS_URL).
 // + Riskli kelimelerde yetkililere 'temsilci_bildirim' sablonu gonderilir.
@@ -16,177 +16,41 @@
 //   ayni mesaji birden fazla kez teslim etse bile bot ayni soruya sadece
 //   BIR KERE cevap yazar.
 
-const https = require("https");
-const { HttpsProxyAgent } = require("https-proxy-agent");
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
+const yurtici = require("../lib/yurtici");
 
 const BASE = "https://masajur-ai-proxy.vercel.app";
 const SECRET = "masajur_yakkoholding_2128";
 
 // ============================================================
-// YURTICI KARGO SORGUSU (eskiden api/kargo.js)
+// YURTICI KARGO SORGUSU (../lib/yurtici.js ile ORTAK istemci)
 // ============================================================
-const YK_HOST = "ws.yurticikargo.com";
-const YK_PATH = "/KOPSWebServices/ShippingOrderDispatcherServices";
-const YK_USER = process.env.YK_USER;
-const YK_PASS = process.env.YK_PASS;
+// Musteri sohbeti oldugu icin teslim-kontrol.js/yorum.js'in arka plan
+// devre kesicisinden AYRI anahtar kullanir - biri tikanirsa digeri etkilenmez.
+const cb = yurtici.createCircuitBreaker("yurtici-cb-canli");
 
-// Keep-Alive baglanti: her denemede yeniden TCP/TLS el sikismasi yapmak
-// yerine baglantiyi acik tutar, gecikmeyi azaltir.
-const ykTlsOptions = {
-  keepAlive: true,
-  keepAliveMsecs: 10000,
-  maxSockets: 10,
-  minVersion: "TLSv1",
-  rejectUnauthorized: false,
-  ciphers: "DEFAULT:@SECLEVEL=0"
-};
-const ykAgent = process.env.QUOTAGUARDSTATIC_URL
-  ? new HttpsProxyAgent(process.env.QUOTAGUARDSTATIC_URL, ykTlsOptions)
-  : new https.Agent(ykTlsOptions);
-// ============================================================
-// DEVRE KESICI (Circuit Breaker) - teslim-kontrol.js ile ORTAK Redis
-// anahtarlari kullanir, cunku ikisi de ayni Yurtici servisine gidiyor.
-// ============================================================
-const CB_KEY_FAILS = "yurtici-cb-canli:fails";
-const CB_KEY_OPEN_UNTIL = "yurtici-cb-canli:open-until";
-const CB_THRESHOLD = 5;
-const CB_COOLDOWN_SECONDS = 600;
+function ykParseXml(raw, key) {
+  if (!raw) return { found: false, reason: "not_found", orderNumber: key };
 
-async function isCircuitOpen() {
-  try {
-    const openUntil = await redis.get(CB_KEY_OPEN_UNTIL);
-    return !!(openUntil && Date.now() < Number(openUntil));
-  } catch (e) {
-    return false;
-  }
-}
-async function recordYurticiFailure() {
-  try {
-    const fails = await redis.incr(CB_KEY_FAILS);
-    if (fails >= CB_THRESHOLD) {
-      await redis.set(CB_KEY_OPEN_UNTIL, Date.now() + CB_COOLDOWN_SECONDS * 1000);
-      await redis.set(CB_KEY_FAILS, 0);
-      console.error("YURTICI DEVRE KESICI ACILDI - " + CB_COOLDOWN_SECONDS + "sn boyunca denenmeyecek");
-    }
-  } catch (e) {}
-}
-async function recordYurticiSuccess() {
-  try { await redis.set(CB_KEY_FAILS, 0); } catch (e) {}
-}
+  const operationMessage = raw.operationMessage;
+  const operationStatus = raw.operationStatus;
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function backoffDelay(attempt) { return 500 * Math.pow(2, attempt - 1) + Math.random() * 300; }
-
-// SERT SON TARIH: Node.js'in https.request'i bazen baglanti kurulamadigi
-// (ETIMEDOUT) durumlarda kendi setTimeout ayarimizi guvenilir sekilde
-// dinlemiyor - isletim sisteminin kendi (cok daha uzun) baglanti zaman
-// asimini bekleyebiliyor. Bu, toplam calisma suresinin Vercel'in 45sn
-// sinirina carpmasina yol acabiliyor. Butun deneme dongusunu ayrica sert
-// bir zaman siniriyla sariyoruz.
-const HARD_DEADLINE_MS = 20000;
-function hardDeadline(ms) {
-  return new Promise((_, reject) => setTimeout(() => reject(new Error("sert son tarih asildi")), ms));
-}
-const YK_LANG = "TR";
-const YK_REQ_TIMEOUT_MS = 8000;
-const YK_MAX_TRIES = 3;
-
-function ykBuildSoap(key) {
-  return '<?xml version="1.0" encoding="UTF-8"?>' +
-    '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="http://yurticikargo.com.tr/ShippingOrderDispatcherServices">' +
-    '<soapenv:Header/><soapenv:Body>' +
-    '<ser:queryShipment>' +
-    '<wsUserName>' + YK_USER + '</wsUserName>' +
-    '<wsPassword>' + YK_PASS + '</wsPassword>' +
-    '<wsLanguage>' + YK_LANG + '</wsLanguage>' +
-    '<keys>' + key + '</keys>' +
-    '<keyType>0</keyType>' +
-    '<addHistoricalData>false</addHistoricalData>' +
-    '<onlyTracking>false</onlyTracking>' +
-    '</ser:queryShipment>' +
-    '</soapenv:Body></soapenv:Envelope>';
-}
-
-function ykTag(xml, name) {
-  const m = xml.match(new RegExp("<" + name + ">([\\s\\S]*?)</" + name + ">"));
-  return m ? m[1].trim() : null;
-}
-function ykFmtDate(d, t) {
-  if (!d || d.length < 8) return null;
-  const day = d.slice(6, 8), mon = d.slice(4, 6), yr = d.slice(0, 4);
-  let time = "";
-  if (t && t.length >= 4) { const tt = ("000000" + t).slice(-6); time = " " + tt.slice(0,2) + ":" + tt.slice(2,4); }
-  return day + "." + mon + "." + yr + time;
-}
-
-function ykSoapPostOnce(body) {
-  return new Promise(function (resolve, reject) {
-    const options = {
-      host: YK_HOST, port: 443, path: YK_PATH, method: "POST",
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        "SOAPAction": "",
-        "Content-Length": Buffer.byteLength(body)
-      },
-      agent: ykAgent // Keep-Alive: baglantiyi acik tutar, TLS'i tekrarlamaz
-    };
-    const req = https.request(options, function (resp) {
-      let data = "";
-      resp.setEncoding("utf8");
-      resp.on("data", function (c) { data += c; });
-      resp.on("end", function () { resolve(data); });
-    });
-    req.on("error", function (e) { reject(e); });
-    req.setTimeout(YK_REQ_TIMEOUT_MS, function () { req.destroy(new Error("timeout")); });
-    req.write(body);
-    req.end();
-  });
-}
-
-async function ykSoapPost(body) {
-  let lastErr;
-  for (let i = 1; i <= YK_MAX_TRIES; i++) {
-    try {
-      const xml = await ykSoapPostOnce(body);
-      if (xml && xml.length > 50) return xml;
-      lastErr = new Error("empty");
-      console.error("KARGO DENEME " + i + ": bos cevap");
-    } catch (e) {
-      lastErr = e;
-      console.error("KARGO DENEME " + i + " HATA:", e && e.message ? e.message : e);
-    }
-    if (i < YK_MAX_TRIES) await sleep(backoffDelay(i));
-  }
-  throw lastErr || new Error("timeout");
-}
-
-function ykParseXml(xml, key) {
-  const operationMessage = ykTag(xml, "operationMessage");
-  const operationStatus = ykTag(xml, "operationStatus");
-  const trackingUrl = ykTag(xml, "trackingUrl");
-  const receiver = ykTag(xml, "receiverCustName");
-  const branch = ykTag(xml, "deliveryUnitName");
-  const eventExplanation = ykTag(xml, "cargoEventExplanation");
-  const reasonId = ykTag(xml, "cargoReasonId");
-  const reasonExplanation = ykTag(xml, "cargoReasonExplanation");
-
-  if (!operationMessage && !operationStatus && !eventExplanation) {
+  if (!operationMessage && !operationStatus && !raw.cargoEventExplanation) {
     return { found: false, reason: "not_found", orderNumber: key };
   }
 
   return {
     found: true, orderNumber: key,
     statusMessage: operationMessage, statusCode: operationStatus,
-    lastEvent: eventExplanation || null,
-    lastUnit: branch || null,
+    lastEvent: raw.cargoEventExplanation || null,
+    lastUnit: raw.deliveryUnitName || null,
     lastCity: null,
     lastDate: null,
-    reasonId: reasonId || null,
-    reasonExplanation: reasonExplanation || null,
-    deliveredTo: (operationStatus === "DLV") ? receiver : null,
-    trackingUrl: trackingUrl
+    reasonId: raw.cargoReasonId || null,
+    reasonExplanation: raw.cargoReasonExplanation || null,
+    deliveredTo: (operationStatus === "DLV") ? raw.receiverCustName : null,
+    trackingUrl: raw.trackingUrl
   };
 }
 
@@ -194,29 +58,13 @@ async function getKargoInfo(orderNumber) {
   const key = String(orderNumber).replace(/[^0-9]/g, "");
   if (!key) return { found: false, reason: "no_number" };
 
-  // Devre kesici acik ise Yurtici'ye hic gitmeden dur.
-  if (await isCircuitOpen()) {
-    console.log("WEBHOOK-PROCESS: devre kesici ACIK, Yurtici'ye gidilmiyor");
-    return { found: false, reason: "circuit_open" };
-  }
-
-  try {
-    const xml = await Promise.race([
-      ykSoapPost(ykBuildSoap(key)),
-      hardDeadline(HARD_DEADLINE_MS)
-    ]);
-    await recordYurticiSuccess();
-    return ykParseXml(xml, key);
-  } catch (error) {
-    await recordYurticiFailure();
-    console.error("KARGO ERROR:", error && error.message ? error.message : error);
-    return { found: false, reason: "error", detail: (error && error.message) ? error.message : String(error) };
-  }
+  const raw = await yurtici.queryShipment(key, cb, "WEBHOOK-PROCESS");
+  if (!raw) return { found: false, reason: "error" };
+  return ykParseXml(raw, key);
 }
 // ============================================================
 
 // --- Konusma hafizasi + mukerrer isleme kilidi (Upstash Redis) ---
-// (redis baglantisi dosyanin basinda, devre kesici icin zaten kuruldu)
 const HISTORY_MAX = 20;          // tutulacak son mesaj sayisi (user+assistant)
 const HISTORY_TTL = 172800;      // 2 gun (saniye)
 
@@ -440,6 +288,8 @@ module.exports = async (req, res) => {
           if (kargo.lastUnit) orderNote += "Bulunduğu Yer: " + kargo.lastUnit + (kargo.lastCity ? " (" + kargo.lastCity + ")" : "") + "\n";
           if (kargo.reasonExplanation) orderNote += "Not: " + kargo.reasonExplanation + "\n";
           if (kargo.lastDate) orderNote += "Son Güncelleme: " + kargo.lastDate + "\n";
+          if (kargo.statusCode === "DLV" && kargo.deliveredTo) orderNote += "Teslim Alan: " + kargo.deliveredTo + "\n";
+          if (kargo.trackingUrl) orderNote += "Takip Linki: " + kargo.trackingUrl + "\n";
         } else {
           // ONEMLI: Yurtici'den anlik cevap gelmedi diye "henuz kargoya
           // verilmedi" diye TAHMIN YURUTME - sip.status (yukarida) zaten
