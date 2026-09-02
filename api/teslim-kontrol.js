@@ -68,7 +68,9 @@ async function getKargoDetail(orderNumber) {
   const raw = await yurtici.queryShipment(orderNumber, cb, "TESLIM-KONTROL");
   if (!raw) return null;
   return {
-    status: raw.operationStatus,          // "DLV" = teslim edildi
+    status: raw.operationStatus,                            // HAM Yurtici kodu - loglama icin, fatura kararinda KULLANMA
+    gercekTeslim: raw.gercektenMusteriyeTeslimEdildi,        // DOGRU alan: gercekten musteriye mi teslim edildi
+    sirketeIadeEdildi: raw.sirketeIadeEdildi,                // DLV ama aslinda paket bize geri donmus
     reasonId: raw.cargoReasonId,          // orn. "AAB"/"MSA"
     reasonExplanation: raw.cargoReasonExplanation,
     branch: raw.deliveryUnitName          // gonderinin bekledigi sube
@@ -203,9 +205,10 @@ async function sendTeslimBasarisizMesaji(phone, name, orderNumber, branch) {
   await logTeslimBasarisizToSheets(phone, name, orderNumber, branch, waStatus);
 }
 
-// 5 gun gecmesine ragmen teslim onayi gelmediyse: fatura KESILMEZ,
-// sadece Google Sheets'e alarm kaydi dusulur (manuel kontrol icin).
-async function logTeslimAlarmToSheets(orderNumber, deneme) {
+// 5 gun gecmesine ragmen teslim onayi gelmediyse (veya paket bize iade
+// edildiyse): fatura KESILMEZ, sadece Google Sheets'e alarm kaydi dusulur
+// (manuel kontrol icin). status parametresi verilmezse eski 5-gunluk mesaj kullanilir.
+async function logTeslimAlarmToSheets(orderNumber, deneme, status) {
   try {
     if (!process.env.SHEETS_URL) {
       console.error("SHEETS_URL yok, alarm kaydedilemedi:", orderNumber);
@@ -218,13 +221,32 @@ async function logTeslimAlarmToSheets(orderNumber, deneme) {
         type: "fatura_alarm",
         orderNumber: orderNumber,
         deneme: deneme,
-        status: "5 GUN GECTI - TESLIM ONAYLANAMADI - FATURA KESILMEDI - MANUEL KONTROL GEREKLI"
+        status: status || "5 GUN GECTI - TESLIM ONAYLANAMADI - FATURA KESILMEDI - MANUEL KONTROL GEREKLI"
       })
     }, 8000);
     console.log("TESLIM-KONTROL: alarm Sheets'e kaydedildi:", orderNumber);
   } catch (e) {
     console.error("TESLIM-KONTROL ALARM LOG HATA:", e && e.message ? e.message : e);
   }
+}
+
+// Paket musteriye ulasmadan bize (sirkete) iade edildiyse: fatura kesilmez,
+// bir kereye mahsus Sheets'e bildirim dusulur (manuel takip icin - yeniden
+// gonderim mi, iade mi islenecek sana kalir) ve kalici bir Redis bayragiyla
+// bir daha aday listesine girmemesi saglanir (aksi halde 15 gunluk pencere
+// boyunca her taramada tekrar tekrar kontrol edilip ayni bildirim tekrarlanirdi).
+async function alreadyFlaggedReturnedToCompany(orderNumber) {
+  try {
+    const v = await redis.get("sirkete-iade-gorundu:" + orderNumber);
+    return !!v;
+  } catch (e) { return false; }
+}
+async function isaretleIadeGorulduSirkete(orderNumber) {
+  try {
+    await redis.set("sirkete-iade-gorundu:" + orderNumber, "1", { ex: 90 * 24 * 3600 });
+  } catch (e) {}
+  await logTeslimAlarmToSheets(orderNumber, 0,
+    "PAKET MUSTERIYE ULASMADAN SIRKETE IADE EDILDI - FATURA KESILMEDI - MANUEL KONTROL/YENIDEN GONDERIM GEREKEBILIR");
 }
 
 // ============ TARAMA MODU (guvenlik agi) ============
@@ -342,6 +364,17 @@ async function handleTarama(req, res) {
         console.error("TARAMA: Redis mget hatasi, filtreleme atlandi:", e && e.message ? e.message : e);
       }
     }
+    // Zaten "sirkete iade edildi" olarak isaretlenmis siparisleri de atla -
+    // bunlar hic bir zaman gercek DLV'ye donmeyecek, her taramada tekrar
+    // sorgulamaya (ve mukerrer bildirime) gerek yok.
+    if (adaylar.length > 0) {
+      try {
+        const iadeFlags = await redis.mget(...adaylar.map(x => "sirkete-iade-gorundu:" + x.no));
+        adaylar = adaylar.filter((x, i) => !iadeFlags[i]);
+      } catch (e) {
+        console.error("TARAMA: Redis mget hatasi (iade), filtreleme atlandi:", e && e.message ? e.message : e);
+      }
+    }
 
     console.log("TARAMA: toplam siparis:", tumSiparisler.length, "aday:", adaylar.length);
 
@@ -363,10 +396,17 @@ async function handleTarama(req, res) {
       const detail = await getKargoDetail(String(no));
       console.log("TARAMA:", no, "->", JSON.stringify(detail));
 
-      if (detail && detail.status === "DLV") {
+      if (detail && detail.gercekTeslim) {
         await triggerFatura(String(no));
         faturaSayisi++;
         detaylar.push(no + ":FATURA");
+      } else if (detail && detail.sirketeIadeEdildi) {
+        // Paket musteriye ulasmadan bize geri donmus - fatura kesilmez,
+        // aday listesinden dusmesi icin kalici bir isaret birak (bir kereye
+        // mahsus bildirim, tekrar tekrar aynisini dusurmesin).
+        const zatenIsaretli = await alreadyFlaggedReturnedToCompany(String(no));
+        if (!zatenIsaretli) await isaretleIadeGorulduSirkete(String(no));
+        detaylar.push(no + ":SIRKETE-IADE");
       } else if (detail && detail.reasonId && FAILED_REASON_CODES.includes(detail.reasonId)) {
         const phone = normalizeTelefon(order.phone || (order.shipping_address && order.shipping_address.phone));
         if (phone) {
@@ -437,9 +477,18 @@ module.exports = async (req, res) => {
     const detail = await getKargoDetail(orderNumber);
     console.log("TESLIM-KONTROL DURUM:", orderNumber, "->", JSON.stringify(detail));
 
-    if (detail && detail.status === "DLV") {
+    if (detail && detail.gercekTeslim) {
       await triggerFatura(orderNumber);
       return res.status(200).send("OK - teslim edildi, fatura tetiklendi");
+    }
+
+    // Paket musteriye ulasmadan bize (sirkete) iade edildiyse: fatura kesme,
+    // tekrar tekrar denemeyi durdur, bir kereye mahsus Sheets'e bildir.
+    if (detail && detail.sirketeIadeEdildi) {
+      console.log("TESLIM-KONTROL: paket musteriye ulasmadan sirkete iade edildi, fatura kesilmeyecek:", orderNumber);
+      const zatenIsaretli = await alreadyFlaggedReturnedToCompany(orderNumber);
+      if (!zatenIsaretli) await isaretleIadeGorulduSirkete(orderNumber);
+      return res.status(200).send("OK - paket sirkete iade edildi, fatura kesilmedi");
     }
 
     // Kurye teslim edemedi (orn. "AAB"/"MSA") ve musteriye daha once bildirim
