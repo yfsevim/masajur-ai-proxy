@@ -49,7 +49,16 @@ function ykParseXml(raw, key) {
     lastDate: null,
     reasonId: raw.cargoReasonId || null,
     reasonExplanation: raw.cargoReasonExplanation || null,
-    deliveredTo: (operationStatus === "DLV") ? raw.receiverCustName : null,
+    // 2026-09-02 DUZELTME: eskiden "operationStatus === 'DLV'" yeterli
+    // sayiliyordu, ama Yurtici paket bize (sirkete) iade oldugunda da
+    // DLV donduruyor - bu durumda receiverCustName musterinin degil KENDI
+    // SIRKETIMIZIN adi oluyor. Musteriye yanlislikla kendi sirket adimizi
+    // "teslim alan siz" gibi gostermemek icin, ve asagidaki gercekTeslim/
+    // sirketeIadeEdildi alanlariyla dogru ayrimi yapabilmek icin bu iki alan
+    // eklendi. deliveredTo artik SADECE gercek musteri teslimatinda dolduruluyor.
+    gercekTeslim: raw.gercektenMusteriyeTeslimEdildi,
+    sirketeIadeEdildi: raw.sirketeIadeEdildi,
+    deliveredTo: raw.gercektenMusteriyeTeslimEdildi ? raw.receiverCustName : null,
     trackingUrl: raw.trackingUrl
   };
 }
@@ -272,7 +281,7 @@ module.exports = async (req, res) => {
 
       if ((sip && sip.found) || (kargo && kargo.found)) {
         orderNote =
-          "[SİPARİŞ & KARGO BİLGİSİ - Aşağıdaki gerçek bilgileri kullanarak müşteriye doğal, sıcak ve net bir dille cevap ver. Asla bilgi uydurma, sadece bunları kullan. Kargo teslim edildiyse bunu olumlu söyle; yoldaysa nerede olduğunu ve güncel durumunu söyle.]\n";
+          "[SİPARİŞ & KARGO BİLGİSİ - Aşağıdaki gerçek bilgileri kullanarak müşteriye doğal, sıcak ve net bir dille cevap ver. Asla bilgi uydurma, sadece bunları kullan. Kargo GERÇEKTEN müşteriye teslim edildiyse bunu olumlu söyle; yoldaysa nerede olduğunu ve güncel durumunu söyle. Aşağıda başka bir yönlendirme varsa (örn. şirkete iade notu) onu MUTLAKA önceliklendir ve 'teslim edildi' diye olumlu sunma.]\n";
 
         if (sip && sip.found) {
           orderNote += "Sipariş No: " + sip.orderName + "\n";
@@ -282,13 +291,26 @@ module.exports = async (req, res) => {
           orderNote += "Sipariş No: " + orderNumber + "\n";
         }
 
-        if (kargo && kargo.found) {
+        if (kargo && kargo.found && kargo.sirketeIadeEdildi) {
+          // 2026-09-02 KRITIK DUZELTME: Yurtici, paket musteriye ulasmadan
+          // bize (sirkete) geri dondugunde de operationStatus="DLV" ("teslim
+          // edildi") donduruyor. Bunu duzeltmeden once bot musteriye "kargonuz
+          // teslim edildi" diye YANLISLIKLA olumlu haber veriyordu, oysa paket
+          // hicbir zaman musteriye ulasmamisti. Artik bu durumda net ve
+          // dogru bir aciklama + acik bir "olumlu sunma" talimati veriliyor.
+          orderNote += "Kargo Durumu: Paket müşteriye ulaştırılamadı, kargo firması tarafından şirketimize iade edildi.\n";
+          orderNote += "[ÖNEMLİ SİSTEM NOTU: Bu siparişi KESİNLİKLE 'teslim edildi' diye olumlu sunma - paket müşteriye ulaşmadan bize geri döndü. Müşteriye durumu nazik ve net biçimde açıkla, yeniden gönderim veya iade konusunda ekibimizin ilgileneceğini belirt; gerekirse 0553 068 16 19 / 0551 148 53 44 numaralarını paylaş.]\n";
+          if (kargo.lastEvent) orderNote += "Son Hareket: " + kargo.lastEvent + "\n";
+          if (kargo.lastUnit) orderNote += "Bulunduğu Yer: " + kargo.lastUnit + "\n";
+          if (kargo.reasonExplanation) orderNote += "Not: " + kargo.reasonExplanation + "\n";
+          if (kargo.trackingUrl) orderNote += "Takip Linki: " + kargo.trackingUrl + "\n";
+        } else if (kargo && kargo.found) {
           if (kargo.statusMessage) orderNote += "Kargo Durumu: " + kargo.statusMessage + "\n";
           if (kargo.lastEvent) orderNote += "Son Hareket: " + kargo.lastEvent + "\n";
           if (kargo.lastUnit) orderNote += "Bulunduğu Yer: " + kargo.lastUnit + (kargo.lastCity ? " (" + kargo.lastCity + ")" : "") + "\n";
           if (kargo.reasonExplanation) orderNote += "Not: " + kargo.reasonExplanation + "\n";
           if (kargo.lastDate) orderNote += "Son Güncelleme: " + kargo.lastDate + "\n";
-          if (kargo.statusCode === "DLV" && kargo.deliveredTo) orderNote += "Teslim Alan: " + kargo.deliveredTo + "\n";
+          if (kargo.gercekTeslim && kargo.deliveredTo) orderNote += "Teslim Alan: " + kargo.deliveredTo + "\n";
           if (kargo.trackingUrl) orderNote += "Takip Linki: " + kargo.trackingUrl + "\n";
         } else {
           // ONEMLI: Yurtici'den anlik cevap gelmedi diye "henuz kargoya
