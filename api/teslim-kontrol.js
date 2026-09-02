@@ -160,14 +160,28 @@ async function scheduleRecheck(orderNumber, deneme, phone, name) {
 
 // Teslim edildi -> fatura-kes.js'i tetikle
 async function triggerFatura(orderNumber) {
+  // 2026-09-02 DUZELTME: fatura-kes.js CALISABILDIYSE kendi sonucunu (basari,
+  // hata, belirsiz durum, iptal, bulunamadi) zaten KENDI ICINDE Sheets'e
+  // yaziyor - burada AYRICA loglamak ayni olayi IKI KEZ kaydedip gereksiz
+  // gurultu yaratir (kullanici acikca "abartma" dedi). Bu yuzden burada
+  // SADECE fatura-kes.js'e hic ULASILAMADIGI durumu (istek onun calisma
+  // firsati bile bulamadan koptu, yani HICBIR YERDE kayit yok) logluyoruz.
+  // Tarama zaten ~30 dk icinde otomatik tekrar deneyecek - bu normal
+  // kendiliginden iyilesme akisi, alarm sadece "hicbir iz kalmasin" diye.
   const url = "https://masajur-ai-proxy.vercel.app/api/fatura-kes?secret=" + SECRET;
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ orderNumber: orderNumber })
-  });
-  const data = await resp.json().catch(() => ({}));
-  console.log("TESLIM-KONTROL: fatura-kes tetiklendi:", JSON.stringify(data));
+  try {
+    const resp = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderNumber: orderNumber })
+    }, 25000);
+    const data = await resp.json().catch(() => ({}));
+    console.log("TESLIM-KONTROL: fatura-kes tetiklendi:", JSON.stringify(data));
+  } catch (e) {
+    console.error("TESLIM-KONTROL: fatura-kes'e ulasilamadi:", e && e.message ? e.message : e);
+    await logTeslimAlarmToSheets(orderNumber, 0,
+      "FATURA-KES'E ULASILAMADI (ag hatasi/zaman asimi, fatura-kes.js hic calisamadi) - tarama ~30 dk icinde otomatik tekrar deneyecek");
+  }
 }
 
 // Ayni siparis icin "teslim basarisiz" bildirimini bir kereden fazla
@@ -536,7 +550,13 @@ module.exports = async (req, res) => {
     const name = body.name ? String(body.name) : "Merhaba";
 
     if (!orderNumber) {
+      // Normalde hic olmamasi gereken bir durum (fatura-baslat.js ve QStash
+      // recheck'i her zaman orderNumber gonderir) ama "hicbir sey sessizce
+      // kaybolmasin" ilkesi geregi bunu da Sheets'e dusuruyoruz - en azindan
+      // boyle bir cagrinin oldugu goze carpsin.
       console.error("TESLIM-KONTROL: siparis no yok");
+      await logTeslimAlarmToSheets("BILINMIYOR", 0,
+        "SISTEM UYARISI: teslim-kontrol.js siparis numarasi OLMADAN cagrildi - hangi siparis oldugu belirlenemedi, tetikleyen kodu kontrol edin");
       return res.status(200).send("OK");
     }
 
