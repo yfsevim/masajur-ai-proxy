@@ -230,7 +230,10 @@ async function logTeslimAlarmToSheets(orderNumber, deneme) {
 // ============ TARAMA MODU (guvenlik agi) ============
 
 const TARAMA_API_VERSION = "2026-04"; // fatura-kes.js ile ayni
-const TARAMA_BATCH_SIZE = 10;         // Vercel zaman asimina takilmamak icin bir seferde en fazla bu kadar siparis
+// 2026-09-02: 10 ile denendi, Vercel'de FUNCTION_INVOCATION_TIMEOUT alindi
+// (Yurtici sorgulari bazen retry'a giriyor, her biri birkac saniye surebiliyor).
+// 5'e dusuruldu + vercel.json'da maxDuration 60'a cikarildi - guvenli marj icin.
+const TARAMA_BATCH_SIZE = 5;
 // BILINCLI KARAR (2026-09-02): sadece YENI siparislerin arada kaybolmamasi
 // icin var, GECMISE dokunmuyor. Gecmis eksik faturalari kullanici manuel
 // hallediyor. Pencere kucuk tutuluyor ki tarama fiziksel olarak eski
