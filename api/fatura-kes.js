@@ -133,36 +133,31 @@ async function logFaturaToSheets(orderNumber, tip, aliciAdi, tutar, status) {
   try {
     if (!process.env.SHEETS_URL) return;
     const body = JSON.stringify({ type: "fatura", orderNumber, faturaTipi: tip, aliciAdi, tutar, status });
-    const MAX_TRIES = 3;
-    for (let i = 1; i <= MAX_TRIES; i++) {
-      try {
-        // 2026-09-02 DUZELTME (12384/12409/12415 Sheets'te 2-3 kez gorundugu
-        // vaka): eskiden 8000ms'de zaman asimi olursa "basarisiz" sayilip
-        // AYNI satir tekrar gonderiliyordu. Ama Google Apps Script tarafinda
-        // satir EKLEME islemi cogu zaman zaten TAMAMLANMIS oluyor, sadece HTTP
-        // cevabi gecikiyor - yani zaman asimi "basarisiz oldu" anlamina
-        // gelmez, "cevabi goremedim" anlamina gelir. Bunu "basarisiz" sayip
-        // tekrar denemek, ayni satirin Sheets'e 2-3 kez yazilmasina yol
-        // aciyordu (fatura numarasi/ETTN hep AYNIYDI - yani mukerrer fatura
-        // KESILMEDI, sadece log satiri mukerrer yazildi - yine de kafa
-        // karistirici ve yanlis). Zaman asimini biraz uzattik VE zaman
-        // asiminda ARTIK TEKRAR DENEMIYORUZ - sadece net baglanti hatalarinda
-        // (DNS, ag koptu vb.) veya sunucunun acikca hata dondurdugu (HTTP
-        // 4xx/5xx) durumlarda tekrar deniyoruz.
-        const resp = await fetchWithTimeout(process.env.SHEETS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body }, 15000);
-        if (resp.ok) return;
-        console.error("FATURA SHEETS LOG: HTTP " + resp.status + " (deneme " + i + "/" + MAX_TRIES + ")");
-      } catch (e) {
-        const zamanAsimiMi = e && (e.name === "AbortError" || /abort/i.test(e.message || ""));
-        if (zamanAsimiMi) {
-          console.error("FATURA SHEETS LOG: zaman asimi - Sheets tarafinda islem TAMAMLANMIS OLABILIR, mukerrer kayit riski yuzunden TEKRAR DENENMIYOR:", orderNumber);
-          return;
-        }
-        console.error("FATURA SHEETS LOG HATA (deneme " + i + "/" + MAX_TRIES + "):", e && e.message ? e.message : e);
+    // 2026-09-03 DUZELTME (#12558 vakasi - GERCEK Sheets verisiyle bulundu):
+    // bir onceki duzeltme SADECE zaman asiminda (AbortError) tekrar denemeyi
+    // durdurmustu, ama HTTP hata durumunda (resp.ok false) veya AbortError
+    // DISINDAKI baglanti hatalarinda (orn. "socket hang up"/ECONNRESET) HALA
+    // tekrar deniyordu. #12558'de tam bu oldu: fatura Mysoft'ta SADECE BIR
+    // KEZ olustu (iki Sheets satirinda da Fatura No VE ETTN birebir ayni),
+    // ama Google Apps Script'ten donen cevap bir sekilde "basarisiz" gibi
+    // goruldugu icin AYNI satir ikinci kez gonderildi ve Sheets'e mukerrer
+    // yazildi. Google Apps Script web app'i cevabi bize duzgun ulastiramasa
+    // bile satiri COGU ZAMAN ZATEN EKLEMIS oluyor - yani "cevap alamadim" ile
+    // "islem gercekten basarisiz oldu" arasindaki farki guvenilir sekilde
+    // AYIRT EDEMIYORUZ. Bu satir sadece bir DENETIM KAYDI - asil gercek kaynak
+    // (Mysoft'taki fatura, Shopify etiketi) bu fonksiyondan tamamen BAGIMSIZ
+    // zaten basariyla tamamlanmis oluyor - o yuzden nadiren KAYBOLMASI, sikca
+    // MUKERRER GORUNMESINDEN cok daha az sorunlu. Bu yuzden ARTIK HICBIR
+    // HATA TURUNDE TEKRAR DENEMIYORUZ (teslim-kontrol.js/yorum.js'teki diger
+    // Sheets loglama fonksiyonlariyla AYNI, tek seferlik davranisa getirildi).
+    try {
+      const resp = await fetchWithTimeout(process.env.SHEETS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body }, 15000);
+      if (!resp.ok) {
+        console.error("FATURA SHEETS LOG: HTTP " + resp.status + " - satir Sheets'e yazilmis OLABILIR, mukerrer kayit riski yuzunden TEKRAR DENENMIYOR:", orderNumber);
       }
-      if (i < MAX_TRIES) await new Promise(r => setTimeout(r, 1000 * i));
+    } catch (e) {
+      console.error("FATURA SHEETS LOG HATA - satir Sheets'e yazilmis OLABILIR, mukerrer kayit riski yuzunden TEKRAR DENENMIYOR:", orderNumber, e && e.message ? e.message : e);
     }
-    console.error("FATURA SHEETS LOG: 3 denemede de basarisiz, kayit Sheets'e dusmedi:", orderNumber);
   } catch (e) {
     console.error("FATURA SHEETS LOG HATA:", e && e.message ? e.message : e);
   }
@@ -473,7 +468,13 @@ module.exports = async (req, res) => {
   try {
     const body = req.body || {};
     const orderNumber = body.orderNumber ? String(body.orderNumber) : "";
-    if (!orderNumber) return res.status(200).json({ ok: false, reason: "no_order_number" });
+    if (!orderNumber) {
+      // "Hicbir sey sessizce kaybolmasin" ilkesi: normalde olmamasi gereken
+      // bir cagri ama yine de Sheets'e dussun ki fark edilsin.
+      await logFaturaToSheets("BILINMIYOR", "-", "-", "-",
+        "SISTEM UYARISI: fatura-kes.js siparis numarasi OLMADAN cagrildi - tetikleyen kodu kontrol edin");
+      return res.status(200).json({ ok: false, reason: "no_order_number" });
+    }
 
     const kilitAlindi = await acquireFaturaLock(orderNumber);
     if (!kilitAlindi) {
