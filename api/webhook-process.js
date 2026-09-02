@@ -166,23 +166,25 @@ function ykParseXml(xml, key) {
   const operationMessage = ykTag(xml, "operationMessage");
   const operationStatus = ykTag(xml, "operationStatus");
   const trackingUrl = ykTag(xml, "trackingUrl");
-  const receiver = ykTag(xml, "receiverInfo");
-  const events = [];
-  const re = /<invDocCargoVOArray>([\s\S]*?)<\/invDocCargoVOArray>/g;
-  let mm;
-  while ((mm = re.exec(xml)) !== null) {
-    const b = mm[1];
-    events.push({ unit: ykTag(b,"unitName"), event: ykTag(b,"eventName"), city: ykTag(b,"cityName"), town: ykTag(b,"townName"), date: ykTag(b,"eventDate"), time: ykTag(b,"eventTime") });
+  const receiver = ykTag(xml, "receiverCustName");
+  const branch = ykTag(xml, "deliveryUnitName");
+  const eventExplanation = ykTag(xml, "cargoEventExplanation");
+  const reasonId = ykTag(xml, "cargoReasonId");
+  const reasonExplanation = ykTag(xml, "cargoReasonExplanation");
+
+  if (!operationMessage && !operationStatus && !eventExplanation) {
+    return { found: false, reason: "not_found", orderNumber: key };
   }
-  if (!operationMessage && events.length === 0) return { found: false, reason: "not_found", orderNumber: key };
-  const last = events.length ? events[events.length - 1] : null;
+
   return {
     found: true, orderNumber: key,
     statusMessage: operationMessage, statusCode: operationStatus,
-    lastEvent: last ? last.event : null,
-    lastUnit: last ? last.unit : null,
-    lastCity: last ? (last.town + " / " + last.city) : null,
-    lastDate: last ? ykFmtDate(last.date, last.time) : null,
+    lastEvent: eventExplanation || null,
+    lastUnit: branch || null,
+    lastCity: null,
+    lastDate: null,
+    reasonId: reasonId || null,
+    reasonExplanation: reasonExplanation || null,
     deliveredTo: (operationStatus === "DLV") ? receiver : null,
     trackingUrl: trackingUrl
   };
@@ -437,9 +439,8 @@ module.exports = async (req, res) => {
           if (kargo.statusMessage) orderNote += "Kargo Durumu: " + kargo.statusMessage + "\n";
           if (kargo.lastEvent) orderNote += "Son Hareket: " + kargo.lastEvent + "\n";
           if (kargo.lastUnit) orderNote += "Bulunduğu Yer: " + kargo.lastUnit + (kargo.lastCity ? " (" + kargo.lastCity + ")" : "") + "\n";
+          if (kargo.reasonExplanation) orderNote += "Not: " + kargo.reasonExplanation + "\n";
           if (kargo.lastDate) orderNote += "Son Güncelleme: " + kargo.lastDate + "\n";
-          if (kargo.statusCode === "DLV" && kargo.deliveredTo) orderNote += "Teslim Alan: " + kargo.deliveredTo + "\n";
-          if (kargo.trackingUrl) orderNote += "Takip Linki: " + kargo.trackingUrl + "\n";
         } else {
           // ONEMLI: Yurtici'den anlik cevap gelmedi diye "henuz kargoya
           // verilmedi" diye TAHMIN YURUTME - sip.status (yukarida) zaten
