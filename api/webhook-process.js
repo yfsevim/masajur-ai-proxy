@@ -204,6 +204,7 @@ async function getKargoInfo(orderNumber) {
       hardDeadline(HARD_DEADLINE_MS)
     ]);
     await recordYurticiSuccess();
+    console.log("KARGO XML CEVABI (" + key + "):", xml.slice(0, 3000));
     return ykParseXml(xml, key);
   } catch (error) {
     await recordYurticiFailure();
