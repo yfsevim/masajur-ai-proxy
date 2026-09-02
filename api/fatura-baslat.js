@@ -14,7 +14,9 @@
 // tarafindan odeme aninda faturalanmis olur - burada tekrar baslatilmaz.
 //
 // Gorevi: siparis numarasini cikar, siparisin odeme tipini Shopify'dan
-// dogrula, COD ise teslim-kontrol.js'e ilk QStash gorevini birak.
+// dogrula, COD ise teslim-kontrol.js'e ilk QStash gorevini birak (telefon
+// ve isim bilgisiyle birlikte - teslimat basarisiz olursa musteriye
+// bildirim gonderebilmek icin).
 
 const SECRET = "masajur_yakkoholding_2128";
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
@@ -34,6 +36,17 @@ function extractOrderNumber(order) {
     return String(order.order_number).replace(/[^0-9]/g, "");
   }
   return "";
+}
+
+// Telefon numarasini Meta WhatsApp API'nin bekledigi formata cevir (90XXXXXXXXXX)
+function normalizePhone(raw) {
+  if (!raw) return null;
+  let p = String(raw).replace(/[^0-9]/g, "");
+  if (p.startsWith("90") && p.length === 12) return p;
+  if (p.startsWith("0") && p.length === 11) return "9" + p;
+  if (p.length === 10) return "90" + p;
+  if (p.startsWith("90")) return p;
+  return p;
 }
 
 // Fulfillment webhook payload'inda odeme bilgisi guvenilir gelmeyebilir,
@@ -61,7 +74,7 @@ async function isKapidaOdeme(orderNumber) {
   return gateways.includes("cash on delivery") || gateways.includes("kapida") || gateways.includes("cod");
 }
 
-async function scheduleTeslimKontrol(orderNumber) {
+async function scheduleTeslimKontrol(orderNumber, phone, name) {
   if (!process.env.QSTASH_TOKEN) {
     console.log("QSTASH_TOKEN yok, teslim kontrolu baslatilamadi");
     return;
@@ -74,7 +87,7 @@ async function scheduleTeslimKontrol(orderNumber) {
       "Content-Type": "application/json",
       "Upstash-Delay": "1d"   // kargoya verildikten ~1 gun sonra ilk kontrol
     },
-    body: JSON.stringify({ orderNumber: orderNumber, deneme: 1 })
+    body: JSON.stringify({ orderNumber: orderNumber, deneme: 1, phone: phone, name: name })
   });
   const data = await resp.json().catch(() => ({}));
   console.log("FATURA-BASLAT: teslim-kontrol gorevi birakildi:", JSON.stringify(data));
@@ -98,6 +111,23 @@ module.exports = async (req, res) => {
       return res.status(200).send("OK");
     }
 
+    const firstName =
+      (order.destination && order.destination.first_name) ||
+      (order.customer && order.customer.first_name) ||
+      (order.billing_address && order.billing_address.first_name) ||
+      (order.shipping_address && order.shipping_address.first_name) ||
+      "Merhaba";
+    const rawPhone =
+      (order.destination && order.destination.phone) ||
+      (order.shipping_address && order.shipping_address.phone) ||
+      (order.billing_address && order.billing_address.phone) ||
+      (order.customer && order.customer.phone) ||
+      order.phone ||
+      (Array.isArray(order.note_attributes) &&
+        order.note_attributes.find(a => a.name === "Telefon numarası")?.value) ||
+      null;
+    const phone = normalizePhone(rawPhone);
+
     const kapida = await isKapidaOdeme(orderNumber);
 
     if (kapida === false) {
@@ -108,8 +138,8 @@ module.exports = async (req, res) => {
     // kapida === true VEYA null (emin olunamadi) -> guvenli taraf: teslim takibini baslat.
     // (Online oldugu halde buraya dusse bile fatura-kes.js zaten "fatura-kesildi"
     // etiketi varsa tekrar fatura kesmiyor, yani cift fatura riski yok.)
-    console.log("FATURA-BASLAT TETIKLENDI (COD veya belirsiz):", orderNumber);
-    await scheduleTeslimKontrol(orderNumber);
+    console.log("FATURA-BASLAT TETIKLENDI (COD veya belirsiz):", orderNumber, "telefon:", phone);
+    await scheduleTeslimKontrol(orderNumber, phone, firstName);
 
     return res.status(200).send("OK");
   } catch (error) {
