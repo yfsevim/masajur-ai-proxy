@@ -6,168 +6,32 @@
 // Yurtici'ye ulasilamazsa (gecici hata/devre kesici acik) eski davranisa
 // donulur: yine de gonderilir - boylece bir API kesintisi butun yorum
 // akisini durdurmaz.
+//
+// Yurtici Kargo sorgusu artik ../lib/yurtici.js'deki ORTAK istemciyi kullanir
+// (webhook-process.js, teslim-kontrol.js ve yorum.js ayni koddan besleniyor).
 
-const https = require("https");
-const { HttpsProxyAgent } = require("https-proxy-agent");
-const { Redis } = require("@upstash/redis");
-const redis = Redis.fromEnv();
+const yurtici = require("../lib/yurtici");
 
 const SECRET = "masajur_yakkoholding_2128";
 const TEMPLATE_NAME = "yorum_istek";
 const TEMPLATE_LANG = "tr";
 
-// ============================================================
-// YURTICI KARGO SORGUSU (teslim-kontrol.js / webhook-process.js ile ayni mantik)
-// ============================================================
-const YK_HOST = "ws.yurticikargo.com";
-const YK_PATH = "/KOPSWebServices/ShippingOrderDispatcherServices";
-const YK_USER = process.env.YK_USER;
-const YK_PASS = process.env.YK_PASS;
-const YK_REQ_TIMEOUT_MS = 8000;
-const YK_MAX_TRIES = 3;
-const YK_HARD_DEADLINE_MS = 20000;
-
-// QUOTAGUARDSTATIC_URL varsa sabit IP proxy'si uzerinden gider (Yurtici'nin
-// whitelist'i icin) - teslim-kontrol.js / webhook-process.js ile ayni ayar.
-const ykTlsOptions = {
-  keepAlive: true,
-  keepAliveMsecs: 10000,
-  maxSockets: 10,
-  minVersion: "TLSv1",
-  rejectUnauthorized: false,
-  ciphers: "DEFAULT:@SECLEVEL=0"
-};
-const ykAgent = process.env.QUOTAGUARDSTATIC_URL
-  ? new HttpsProxyAgent(process.env.QUOTAGUARDSTATIC_URL, ykTlsOptions)
-  : new https.Agent(ykTlsOptions);
-
-// Devre kesici - teslim-kontrol.js ile ORTAK Redis anahtarlari kullanir
-// (ikisi de arka plan/batch isi, musteri sohbetini etkilemez).
-const CB_KEY_FAILS = "yurtici-cb:fails";
-const CB_KEY_OPEN_UNTIL = "yurtici-cb:open-until";
-const CB_THRESHOLD = 5;
-const CB_COOLDOWN_SECONDS = 600;
-
-async function isCircuitOpen() {
-  try {
-    const openUntil = await redis.get(CB_KEY_OPEN_UNTIL);
-    return !!(openUntil && Date.now() < Number(openUntil));
-  } catch (e) {
-    return false;
-  }
-}
-async function recordYurticiFailure() {
-  try {
-    const fails = await redis.incr(CB_KEY_FAILS);
-    if (fails >= CB_THRESHOLD) {
-      await redis.set(CB_KEY_OPEN_UNTIL, Date.now() + CB_COOLDOWN_SECONDS * 1000);
-      await redis.set(CB_KEY_FAILS, 0);
-      console.error("YURTICI DEVRE KESICI ACILDI - " + CB_COOLDOWN_SECONDS + "sn boyunca denenmeyecek");
-    }
-  } catch (e) {}
-}
-async function recordYurticiSuccess() {
-  try { await redis.set(CB_KEY_FAILS, 0); } catch (e) {}
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function backoffDelay(attempt) { return 500 * Math.pow(2, attempt - 1) + Math.random() * 300; }
-function hardDeadline(ms) {
-  return new Promise((_, reject) => setTimeout(() => reject(new Error("sert son tarih asildi")), ms));
-}
-
-function ykBuildSoap(key) {
-  return '<?xml version="1.0" encoding="UTF-8"?>' +
-    '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="http://yurticikargo.com.tr/ShippingOrderDispatcherServices">' +
-    '<soapenv:Header/><soapenv:Body>' +
-    '<ser:queryShipment>' +
-    '<wsUserName>' + YK_USER + '</wsUserName>' +
-    '<wsPassword>' + YK_PASS + '</wsPassword>' +
-    '<wsLanguage>TR</wsLanguage>' +
-    '<keys>' + key + '</keys>' +
-    '<keyType>0</keyType>' +
-    '<addHistoricalData>false</addHistoricalData>' +
-    '<onlyTracking>false</onlyTracking>' +
-    '</ser:queryShipment>' +
-    '</soapenv:Body></soapenv:Envelope>';
-}
-
-function ykTag(xml, name) {
-  const m = xml.match(new RegExp("<" + name + ">([\\s\\S]*?)</" + name + ">"));
-  return m ? m[1].trim() : null;
-}
-
-function ykSoapPostOnce(body) {
-  return new Promise(function (resolve, reject) {
-    const options = {
-      host: YK_HOST, port: 443, path: YK_PATH, method: "POST",
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        "SOAPAction": "",
-        "Content-Length": Buffer.byteLength(body)
-      },
-      agent: ykAgent
-    };
-    const req = https.request(options, function (resp) {
-      let data = "";
-      resp.setEncoding("utf8");
-      resp.on("data", function (c) { data += c; });
-      resp.on("end", function () { resolve(data); });
-    });
-    req.on("error", function (e) { reject(e); });
-    req.setTimeout(YK_REQ_TIMEOUT_MS, function () { req.destroy(new Error("timeout")); });
-    req.write(body);
-    req.end();
-  });
-}
-
-async function ykSoapPostWithRetry(body) {
-  let lastErr;
-  for (let i = 1; i <= YK_MAX_TRIES; i++) {
-    try {
-      const xml = await ykSoapPostOnce(body);
-      if (xml && xml.length > 50) return xml;
-      lastErr = new Error("bos cevap");
-      console.error("YORUM SOAP DENEME " + i + ": bos cevap");
-    } catch (e) {
-      lastErr = e;
-      console.error("YORUM SOAP DENEME " + i + " HATA:", e && e.message ? e.message : e);
-    }
-    if (i < YK_MAX_TRIES) await sleep(backoffDelay(i));
-  }
-  throw lastErr || new Error("bilinmeyen SOAP hatasi");
-}
+// Arka plan/batch isi oldugu icin teslim-kontrol.js ile AYNI ortak devre
+// kesici anahtarini kullanir.
+const cb = yurtici.createCircuitBreaker("yurtici-cb");
 
 // Siparisin gercek teslim durumunu getirir. null donerse (devre kesici acik
 // veya sorgu basarisiz) durum BILINMIYOR demektir - cagiran taraf bu durumda
 // eski davranisa (yorum gonder) donmeli.
 async function getTeslimDurumu(orderNumber) {
-  const key = String(orderNumber).replace(/[^0-9]/g, "");
-  if (!key) return null;
-
-  if (await isCircuitOpen()) {
-    console.log("YORUM: devre kesici ACIK, Yurtici'ye gidilmiyor");
-    return null;
-  }
-
-  try {
-    const xml = await Promise.race([
-      ykSoapPostWithRetry(ykBuildSoap(key)),
-      hardDeadline(YK_HARD_DEADLINE_MS)
-    ]);
-    await recordYurticiSuccess();
-    return {
-      status: ykTag(xml, "operationStatus"),
-      reasonId: ykTag(xml, "cargoReasonId"),
-      reasonExplanation: ykTag(xml, "cargoReasonExplanation")
-    };
-  } catch (e) {
-    await recordYurticiFailure();
-    console.error("YORUM: kargo sorgu HATA:", e && e.message ? e.message : e);
-    return null;
-  }
+  const raw = await yurtici.queryShipment(orderNumber, cb, "YORUM");
+  if (!raw) return null;
+  return {
+    status: raw.operationStatus,
+    reasonId: raw.cargoReasonId,
+    reasonExplanation: raw.cargoReasonExplanation
+  };
 }
-// ============================================================
 
 async function fetchWithTimeout(url, options, ms) {
   const controller = new AbortController();
