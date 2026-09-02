@@ -64,6 +64,68 @@ async function fetchWithTimeout(url, options, ms) {
   }
 }
 
+// 2026-09-02 EKLENDI: #12415 vakasi (Yurtici panelinde "Iade Durumu: IADE" ve
+// "Alici Adi: FATIH TATLI" ile ayri bir "Teslim Alan: YAKUP SEVIM" gorunen,
+// ama receiverCustName sirket adiyla eslesmedigi icin sirketeIadeEdildi=false
+// cikan ve YANLISLIKLA fatura kesilen bir siparis) sirketeIadeEdildi tespitinin
+// TEK BASINA YETERLI OLMADIGINI gosterdi. Yurtici'nin queryShipment SOAP
+// cevabinda "Iade Durumu" ve "Teslim Alan" alanlarinin hangi XML etiketine
+// karsilik geldigini gormek icin bu debug ucu eklendi - ham XML'i ve tum
+// etiketleri oldugu gibi doner, boylece bir sonraki duzeltme TAHMINE degil
+// GERCEK VERIYE dayanir.
+function tumEtiketleriCikar(xml) {
+  const sonuc = {};
+  const regex = /<(\w+)>([^<]*)<\/\1>/g;
+  let m;
+  while ((m = regex.exec(xml)) !== null) {
+    const key = m[1];
+    const val = m[2].trim();
+    if (!(key in sonuc)) sonuc[key] = val;
+    else if (Array.isArray(sonuc[key])) sonuc[key].push(val);
+    else sonuc[key] = [sonuc[key], val];
+  }
+  return sonuc;
+}
+
+async function handleDebugKargo(req, res) {
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) {
+    return res.status(401).send("Unauthorized");
+  }
+  const orderNumber = req.query && req.query.orderNumber;
+  if (!orderNumber) {
+    return res.status(400).send("orderNumber parametresi gerekli, orn: ?mod=debug-kargo&orderNumber=12415&secret=...");
+  }
+  try {
+    const raw = await yurtici.queryShipment(String(orderNumber), cb, "DEBUG-KARGO");
+    if (!raw) {
+      return res.status(200).send("SONUC YOK (devre kesici acik olabilir veya sorgu basarisiz oldu) - siparis: " + orderNumber);
+    }
+    const tumEtiketler = raw.rawXml ? tumEtiketleriCikar(raw.rawXml) : {};
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    return res.status(200).send(
+      "=== SIPARIS: " + orderNumber + " ===\n\n" +
+      "=== SU AN KODUN HESAPLADIGI ALANLAR ===\n" +
+      JSON.stringify({
+        operationStatus: raw.operationStatus,
+        receiverCustName: raw.receiverCustName,
+        deliveryUnitName: raw.deliveryUnitName,
+        cargoEventExplanation: raw.cargoEventExplanation,
+        cargoReasonId: raw.cargoReasonId,
+        cargoReasonExplanation: raw.cargoReasonExplanation,
+        gercektenMusteriyeTeslimEdildi: raw.gercektenMusteriyeTeslimEdildi,
+        sirketeIadeEdildi: raw.sirketeIadeEdildi
+      }, null, 2) +
+      "\n\n=== XML ICINDEKI TUM ETIKETLER (HICBIRI FILTRELENMEDI) ===\n" +
+      JSON.stringify(tumEtiketler, null, 2) +
+      "\n\n=== HAM XML (TAM CEVAP) ===\n" +
+      (raw.rawXml || "(rawXml alani yok - lib/yurtici.js guncellenmemis olabilir)")
+    );
+  } catch (e) {
+    return res.status(200).send("HATA: " + (e && e.message ? e.message : e));
+  }
+}
+
 async function getKargoDetail(orderNumber) {
   const raw = await yurtici.queryShipment(orderNumber, cb, "TESLIM-KONTROL");
   if (!raw) return null;
@@ -450,6 +512,10 @@ async function handleTarama(req, res) {
 module.exports = async (req, res) => {
   if (req.method === "GET" && req.query && req.query.mod === "tarama") {
     return handleTarama(req, res);
+  }
+
+  if (req.method === "GET" && req.query && req.query.mod === "debug-kargo") {
+    return handleDebugKargo(req, res);
   }
 
   if (req.method !== "POST") return res.status(200).send("OK");
