@@ -6,9 +6,12 @@
 // Akis: fulfillment.js (kargoya verildi webhook'u) -> ilk teslim-kontrol
 //       gorevini QStash'e birakir -> bu dosya calisir -> DLV degilse
 //       kendini X saat sonraya yeniden zamanlar -> DLV olunca fatura-kes'i cagirir.
+//
+// Ayrica: kurye teslimatta basarisiz olursa (orn. Yurtici reason kodu "AAB" =
+// Alici Adreste Bulunamadi) musteriye bir kereye mahsus "subeden teslim
+// alabilirsiniz" WhatsApp bildirimi gonderir (teslim_basarisiz sablonu).
 
 const https = require("https");
-const { HttpsProxyAgent } = require("https-proxy-agent");
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
 
@@ -23,6 +26,14 @@ const MAX_DENEME = 96;
 // kaydi dusulur, sen Mysoft panelinden manuel kontrol edip karar verirsin.
 // Sadece gercekten "teslim edildi" (DLV) onayi gelen siparislere fatura kesilir.
 
+// Teslim basarisiz (kapida bulunamadi) bildirimi icin sablon + tekrar
+// gonderimi engelleyen Redis anahtari. Su an SADECE "AAB" (Alici Adreste
+// Bulunamadi) icin gonderiyoruz - "IGH" gibi normal rotalama gecikmeleri
+// bildirim tetiklemez.
+const FAILED_REASON_CODES = ["AAB"];
+const TESLIM_BASARISIZ_TEMPLATE = "teslim_basarisiz";
+const TESLIM_BASARISIZ_LANG = "tr";
+
 const YK_HOST = "ws.yurticikargo.com";
 const YK_PATH = "/KOPSWebServices/ShippingOrderDispatcherServices";
 const YK_USER = process.env.YK_USER;
@@ -34,20 +45,14 @@ const MAX_TRIES = 3;   // kargo.js ile ayni: ayni calisma icinde 3 kere dene
 
 // Keep-Alive baglanti: her denemede yeniden TCP/TLS el sikismasi yapmak
 // yerine baglantiyi acik tutar, gecikmeyi azaltir.
-// Yurtici bazi IP'leri whitelist'e aliyor; Vercel'in degisken IP'sinden
-// baglanti zaman zaman ETIMEDOUT aliyordu. QuotaGuard Static'in sabit
-// IP'si uzerinden baglanip o IP'leri Yurtici'ye whitelist'e ekletiyoruz.
-const ykTlsOptions = {
+const ykAgent = new https.Agent({
   keepAlive: true,
   keepAliveMsecs: 10000,
   maxSockets: 10,
   minVersion: "TLSv1",
   rejectUnauthorized: false,
   ciphers: "DEFAULT:@SECLEVEL=0"
-};
-const ykAgent = process.env.QUOTAGUARDSTATIC_URL
-  ? new HttpsProxyAgent(process.env.QUOTAGUARDSTATIC_URL, ykTlsOptions)
-  : new https.Agent(ykTlsOptions);
+});
 
 // ============================================================
 // DEVRE KESICI (Circuit Breaker) - webhook-process.js ile ORTAK Redis
@@ -177,7 +182,7 @@ async function soapPostWithRetry(body) {
   throw lastErr || new Error("bilinmeyen SOAP hatasi");
 }
 
-async function getKargoStatus(orderNumber) {
+async function getKargoDetail(orderNumber) {
   // Devre kesici acik ise Yurtici'ye hic gitmeden dur - "henuz teslim
   // edilmedi" gibi davranip 6 saat/1 saat sonraya normal sekilde
   // yeniden zamanlanmasini sagliyoruz (fatura yanlislikla kesilmiyor).
@@ -191,8 +196,12 @@ async function getKargoStatus(orderNumber) {
       hardDeadline(HARD_DEADLINE_MS)
     ]);
     await recordYurticiSuccess();
-    const operationStatus = tag(xml, "operationStatus");
-    return operationStatus; // "DLV" = teslim edildi, null/baska deger = henuz degil
+    return {
+      status: tag(xml, "operationStatus"),          // "DLV" = teslim edildi
+      reasonId: tag(xml, "cargoReasonId"),           // orn. "AAB"
+      reasonExplanation: tag(xml, "cargoReasonExplanation"),
+      branch: tag(xml, "deliveryUnitName")           // gonderinin bekledigi sube
+    };
   } catch (e) {
     await recordYurticiFailure();
     throw e;
@@ -200,7 +209,7 @@ async function getKargoStatus(orderNumber) {
 }
 
 // Bir sonraki kontrolu QStash'e birak
-async function scheduleRecheck(orderNumber, deneme) {
+async function scheduleRecheck(orderNumber, deneme, phone, name) {
   if (!process.env.QSTASH_TOKEN) {
     console.log("QSTASH_TOKEN yok, tekrar deneme birakilamadi");
     return;
@@ -213,7 +222,7 @@ async function scheduleRecheck(orderNumber, deneme) {
       "Content-Type": "application/json",
       "Upstash-Delay": RECHECK_DELAY
     },
-    body: JSON.stringify({ orderNumber: orderNumber, deneme: deneme + 1 })
+    body: JSON.stringify({ orderNumber: orderNumber, deneme: deneme + 1, phone: phone, name: name })
   });
 }
 
@@ -227,6 +236,62 @@ async function triggerFatura(orderNumber) {
   });
   const data = await resp.json().catch(() => ({}));
   console.log("TESLIM-KONTROL: fatura-kes tetiklendi:", JSON.stringify(data));
+}
+
+// Ayni siparis icin "teslim basarisiz" bildirimini bir kereden fazla
+// gondermemek icin Redis'te bayrak tutuyoruz (her saat tekrar denendigi icin).
+async function alreadyNotifiedFailed(orderNumber) {
+  try {
+    const v = await redis.get("teslim-basarisiz-bildirildi:" + orderNumber);
+    return !!v;
+  } catch (e) {
+    return false; // Redis erisilemezse guvenli taraf: bildirim gondermeye izin ver
+  }
+}
+async function markNotifiedFailed(orderNumber) {
+  try {
+    await redis.set("teslim-basarisiz-bildirildi:" + orderNumber, "1", { ex: 30 * 24 * 3600 });
+  } catch (e) {}
+}
+
+// Kurye teslim edemedi (orn. AAB) -> musteriye "subeden teslim alabilirsiniz" mesaji
+async function sendTeslimBasarisizMesaji(phone, name, orderNumber, branch) {
+  try {
+    const resp = await fetchWithTimeout(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "template",
+          template: {
+            name: TESLIM_BASARISIZ_TEMPLATE,
+            language: { code: TESLIM_BASARISIZ_LANG },
+            components: [
+              {
+                type: "body",
+                parameters: [
+                  { type: "text", text: String(name || "Merhaba") },
+                  { type: "text", text: String(orderNumber) },
+                  { type: "text", text: String(branch || "en yakın şube") }
+                ]
+              }
+            ]
+          }
+        })
+      },
+      8000
+    );
+    const data = await resp.json().catch(() => ({}));
+    console.log("TESLIM-KONTROL: teslim-basarisiz mesaji sonucu:", JSON.stringify(data));
+  } catch (e) {
+    console.error("TESLIM-KONTROL: teslim-basarisiz mesaji HATA:", e && e.message ? e.message : e);
+  }
 }
 
 // 5 gun gecmesine ragmen teslim onayi gelmediyse: fatura KESILMEZ,
@@ -266,6 +331,8 @@ module.exports = async (req, res) => {
     const body = req.body || {};
     const orderNumber = body.orderNumber ? String(body.orderNumber) : "";
     const deneme = body.deneme || 1;
+    const phone = body.phone ? String(body.phone) : "";
+    const name = body.name ? String(body.name) : "Merhaba";
 
     if (!orderNumber) {
       console.error("TESLIM-KONTROL: siparis no yok");
@@ -274,12 +341,24 @@ module.exports = async (req, res) => {
 
     console.log("TESLIM-KONTROL:", orderNumber, "deneme:", deneme);
 
-    const status = await getKargoStatus(orderNumber);
-    console.log("TESLIM-KONTROL DURUM:", orderNumber, "->", status);
+    const detail = await getKargoDetail(orderNumber);
+    console.log("TESLIM-KONTROL DURUM:", orderNumber, "->", JSON.stringify(detail));
 
-    if (status === "DLV") {
+    if (detail && detail.status === "DLV") {
       await triggerFatura(orderNumber);
       return res.status(200).send("OK - teslim edildi, fatura tetiklendi");
+    }
+
+    // Kurye teslim edemedi (orn. "AAB": Alici Adreste Bulunamadi) ve
+    // musteriye daha once bildirim gonderilmediyse: bir kereye mahsus
+    // "subeden teslim alabilirsiniz" mesajini gonder.
+    if (detail && detail.reasonId && FAILED_REASON_CODES.includes(detail.reasonId) && phone) {
+      const already = await alreadyNotifiedFailed(orderNumber);
+      if (!already) {
+        console.log("TESLIM-KONTROL: teslim basarisiz (" + detail.reasonId + "), bildirim gonderiliyor:", orderNumber);
+        await sendTeslimBasarisizMesaji(phone, name, orderNumber, detail.branch);
+        await markNotifiedFailed(orderNumber);
+      }
     }
 
     if (deneme >= MAX_DENEME) {
@@ -288,7 +367,7 @@ module.exports = async (req, res) => {
       return res.status(200).send("OK - 5 gun asildi, alarm kaydedildi, fatura kesilmedi");
     }
 
-    await scheduleRecheck(orderNumber, deneme);
+    await scheduleRecheck(orderNumber, deneme, phone, name);
     return res.status(200).send("OK - henuz teslim edilmedi, tekrar zamanlandi");
   } catch (error) {
     console.error("TESLIM-KONTROL HATA:", error && error.message ? error.message : error);
@@ -297,12 +376,14 @@ module.exports = async (req, res) => {
     try {
       const body = req.body || {};
       const deneme = body.deneme || 1;
+      const phone = body.phone ? String(body.phone) : "";
+      const name = body.name ? String(body.name) : "Merhaba";
       if (body.orderNumber) {
         if (deneme >= MAX_DENEME) {
           console.error("TESLIM-KONTROL: max deneme asildi (hata yolunda), siparis:", body.orderNumber);
           await logTeslimAlarmToSheets(String(body.orderNumber), deneme);
         } else {
-          await scheduleRecheck(String(body.orderNumber), deneme);
+          await scheduleRecheck(String(body.orderNumber), deneme, phone, name);
         }
       }
     } catch (e2) {}
