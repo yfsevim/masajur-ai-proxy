@@ -31,7 +31,7 @@ const MAX_DENEME = 96;
 // gonderimi engelleyen Redis anahtari. Su an SADECE "AAB" (Alici Adreste
 // Bulunamadi) icin gonderiyoruz - "IGH" gibi normal rotalama gecikmeleri
 // bildirim tetiklemez.
-const FAILED_REASON_CODES = ["AAB"];
+const FAILED_REASON_CODES = ["AAB", "MSA"];
 const TESLIM_BASARISIZ_TEMPLATE = "teslim_basarisiz";
 const TESLIM_BASARISIZ_LANG = "tr";
 
