@@ -258,8 +258,47 @@ async function markNotifiedFailed(orderNumber) {
   } catch (e) {}
 }
 
+// WhatsApp API cevabindan gercek gonderim durumunu cikar
+function readWaStatus(waData) {
+  try {
+    if (waData && waData.messages && waData.messages[0] && waData.messages[0].id) {
+      return "Gonderildi OK (" + waData.messages[0].id + ")";
+    }
+    if (waData && waData.error) {
+      const code = waData.error.code != null ? " [" + waData.error.code + "]" : "";
+      const msg = waData.error.message || "bilinmeyen hata";
+      return "GITMEDI HATA" + code + ": " + msg;
+    }
+    return "BELIRSIZ: " + JSON.stringify(waData).slice(0, 150);
+  } catch (e) {
+    return "DURUM OKUNAMADI: " + (e && e.message ? e.message : e);
+  }
+}
+
+// Teslim basarisiz bildirimini Google Sheets'e yaz (type:teslim_basarisiz)
+async function logTeslimBasarisizToSheets(phone, name, orderNumber, branch, status) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    await fetchWithTimeout(process.env.SHEETS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "teslim_basarisiz",
+        phone: phone,
+        name: name,
+        orderNumber: orderNumber,
+        branch: branch,
+        status: status
+      })
+    }, 8000);
+  } catch (e) {
+    console.error("TESLIM-KONTROL: teslim-basarisiz Sheets log HATA:", e && e.message ? e.message : e);
+  }
+}
+
 // Kurye teslim edemedi (orn. AAB) -> musteriye "subeden teslim alabilirsiniz" mesaji
 async function sendTeslimBasarisizMesaji(phone, name, orderNumber, branch) {
+  let waStatus;
   try {
     const resp = await fetchWithTimeout(
       `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
@@ -293,11 +332,13 @@ async function sendTeslimBasarisizMesaji(phone, name, orderNumber, branch) {
     );
     const data = await resp.json().catch(() => ({}));
     console.log("TESLIM-KONTROL: teslim-basarisiz mesaji sonucu:", JSON.stringify(data));
+    waStatus = readWaStatus(data);
   } catch (e) {
     console.error("TESLIM-KONTROL: teslim-basarisiz mesaji HATA:", e && e.message ? e.message : e);
+    waStatus = "GITMEDI HATA: " + (e && e.message ? e.message : e);
   }
+  await logTeslimBasarisizToSheets(phone, name, orderNumber, branch, waStatus);
 }
-
 // 5 gun gecmesine ragmen teslim onayi gelmediyse: fatura KESILMEZ,
 // sadece Google Sheets'e alarm kaydi dusulur (manuel kontrol icin).
 async function logTeslimAlarmToSheets(orderNumber, deneme) {
