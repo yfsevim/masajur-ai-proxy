@@ -316,14 +316,38 @@ async function mysoftFaturaOlustur(payload) {
     }))
   };
 
-  const resp = await fetchWithTimeout(MYSOFT_API_BASE_URL + "/api/InvoiceOutbox/invoiceOutbox", {
-    method: "POST",
-    headers: {
-      "Authorization": "Bearer " + token,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(invoiceOutboxModel)
-  }, 15000);
+  // 2026-09-02 KRITIK DUZELTME: bu istek zaman asimina ugrar veya baglanti
+  // koparsa, Mysoft'un faturayi GERCEKTEN olusturup olusturmadigini BILEMEYIZ
+  // - istek sunucuya ulasip fatura kesilmis olabilir, sadece BIZE donen cevap
+  // gelmemis olabilir. Bunu eskiden "basarisiz" sayip normal sekilde hata
+  // veriyorduk; bu da kilidi serbest birakip 30 dakika sonra tarama'nin
+  // AYNI siparisi TEKRAR denemesine yol aciyordu - eger ilk deneme aslinda
+  // Mysoft'ta basariliysa, bu GERCEK, MUKERRER bir e-Arsiv fatura kesilmesi
+  // demek olurdu (12415'ten cok daha ciddi bir sorun - orada YANLIS bir
+  // fatura kesilmisti, burada AYNI siparise IKI DOGRU ama MUKERRER fatura
+  // kesilebilirdi). Bu yuzden zaman asimi/baglanti hatasini AYRI bir
+  // "belirsiz" durum olarak isaretliyoruz - cagiran taraf bunu otomatik
+  // tekrar DENEMEYECEK, bunun yerine manuel kontrole dusurecek.
+  let resp;
+  try {
+    resp = await fetchWithTimeout(MYSOFT_API_BASE_URL + "/api/InvoiceOutbox/invoiceOutbox", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(invoiceOutboxModel)
+    }, 20000);
+  } catch (e) {
+    const zamanAsimiMi = e && (e.name === "AbortError" || /abort/i.test(e.message || ""));
+    return {
+      basarili: false,
+      belirsiz: true,
+      mesaj: zamanAsimiMi
+        ? "Mysoft'a fatura olusturma istegi zaman asimina ugradi - FATURA GERCEKTE OLUSMUS OLABILIR, durum belirsiz"
+        : "Mysoft'a baglanti hatasi (fatura olusmus olabilir, durum belirsiz): " + (e && e.message ? e.message : e)
+    };
+  }
 
   const result = await resp.json().catch(() => ({}));
 
@@ -465,6 +489,20 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: true, reason: "already_invoiced_redis" });
     }
 
+    // YENI: bir onceki denemede Mysoft'a giden istek zaman asimina ugramis
+    // ve fatura GERCEKTE olusmus mu olusmamis mi BELIRSIZ kalmissa, bu
+    // bayrak varken ASLA otomatik tekrar denemiyoruz - amac, ayni siparise
+    // yanlislikla IKINCI bir GERCEK e-Arsiv fatura kesilmesini onlemek.
+    // Bu bayrak sadece MANUEL olarak (Mysoft panelinden kontrol edildikten
+    // sonra Redis'ten silinerek) kaldirilir.
+    let belirsizMi = false;
+    try { belirsizMi = !!(await redis.get("fatura-belirsiz:" + orderNumber)); } catch (e) {}
+    if (belirsizMi) {
+      console.log("FATURA-KES: 'belirsiz durum' bayrakli, manuel kontrol bekleniyor, otomatik atlaniyor:", orderNumber);
+      await releaseFaturaLock(orderNumber);
+      return res.status(200).json({ ok: true, reason: "ambiguous_pending_manual_review" });
+    }
+
     const order = await getShopifyOrder(orderNumber);
     if (!order) {
       console.error("FATURA-KES: siparis bulunamadi:", orderNumber);
@@ -504,6 +542,17 @@ module.exports = async (req, res) => {
       await logFaturaToSheets(orderNumber, faturaTipi, payload.aliciUnvanAdSoyad, payload.genelToplam,
         "KESILDI OK - Fatura No: " + (sonuc.faturaNo || "-") + " ETTN: " + (sonuc.faturaEttn || "-"));
       return res.status(200).json({ ok: true, sonuc });
+    } else if (sonuc.belirsiz) {
+      // Zaman asimi/baglanti hatasi - fatura Mysoft'ta GERCEKTE olusmus
+      // olabilir. Kilidi BILEREK serbest birakmiyoruz ve uzun sureli bir
+      // bayrak koyuyoruz ki tarama veya baska bir tetikleyici bu siparisi
+      // otomatik tekrar deneyip MUKERRER GERCEK FATURA riski yaratmasin.
+      try { await redis.set("fatura-belirsiz:" + orderNumber, "1", { ex: 48 * 3600 }); } catch (e) {}
+      await logFaturaToSheets(orderNumber, faturaTipi, payload.aliciUnvanAdSoyad, payload.genelToplam,
+        "BELIRSIZ DURUM: " + sonuc.mesaj + " - MUTLAKA Mysoft panelinden bu siparis icin fatura olusup olusmadigini kontrol edin. " +
+        "Olusmamissa Redis'teki 'fatura-belirsiz:" + orderNumber + "' anahtarini silip tekrar tetikleyin; olusmussa hicbir sey yapmayin (otomatik tekrar denenmeyecek).");
+      console.error("FATURA-KES: BELIRSIZ DURUM, otomatik tekrar denenmeyecek, manuel kontrol gerekli:", orderNumber, sonuc.mesaj);
+      return res.status(200).json({ ok: false, reason: "ambiguous_timeout", sonuc });
     } else {
       await logFaturaToSheets(orderNumber, faturaTipi, payload.aliciUnvanAdSoyad, payload.genelToplam,
         "KESILEMEDI: " + (sonuc.mesaj || "bilinmeyen"));
