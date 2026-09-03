@@ -1,7 +1,34 @@
 // api/fulfillment.js
+const { Redis } = require("@upstash/redis");
+const redis = Redis.fromEnv();
+
 const SECRET = "masajur_yakkoholding_2128";
 const TEMPLATE_NAME = "kargo_verildi_v3";
 const TEMPLATE_LANG = "tr";
+
+// 2026-09-03 EKLENDI: Shopify'in "kargoya verildi" webhook'u ayni siparis
+// icin birden fazla kez tetiklenebiliyor (webhook tekrar denemesi, veya
+// kargo bilgisi/takip no guncellendiginde ikinci bir fulfillment olayi
+// dogmasi gibi nedenlerle) - bu dosyanin hicbir tekrar-onleme kontrolu
+// olmadigi icin musteriye AYNI "kargo verildi" mesaji birden fazla kez
+// gidiyordu (gercek vaka: Google Sheets'te siparis #12721'e ~2 saat icinde
+// 5 kere, farkli wamid'lerle, ayni mesaj gittigi gorunuldu). Ayrica her
+// tekrar scheduleYorum() de yeniden calisiyordu, yani 4 gun sonraki "yorum
+// yapar misiniz" mesaji da mukerrer gidebilirdi.
+// Cozum: fatura-kes.js/teslim-kontrol.js'deki ile ayni desen - Redis'te
+// atomik (NX) bir bayrakla siparis basina SADECE BIR KERE bildirim/gorev
+// olusturuluyor. Bilincli olarak SIPARIS bazinda (fulfillment olayi bazinda
+// degil) tek seferlik - bu magazada siparis basina tek kargo/tek fulfillment
+// olmasi bekleniyor, kismi/coklu fulfillment senaryosu yok.
+async function kargoBildirimKilidiAl(orderNumber) {
+  try {
+    const result = await redis.set("kargo-bildirimi-yapildi:" + orderNumber, "1", { nx: true, ex: 90 * 24 * 3600 });
+    return result !== null; // null donerse bu siparis icin zaten daha once kilit alinmis demek
+  } catch (e) {
+    console.error("FULFILLMENT: Redis kilit hatasi, guvenli taraf - devam ediliyor:", e && e.message ? e.message : e);
+    return true; // Redis erisilemezse eski davranisa don (mesaj gitsin, hic gitmemesin)
+  }
+}
 
 // 3 gun sonra yorum kontrolu icin QStash'e gorev birak
 async function scheduleYorum(orderNumber, phone, name) {
@@ -139,6 +166,17 @@ module.exports = async (req, res) => {
       "Ürün";
     const phone = normalizePhone(rawPhone);
     console.log("FULFILLMENT GELDI:", JSON.stringify({ firstName, rawPhone, phone, orderName: order.name, orderNumber, productName }));
+
+    // Mukerrer webhook korumasi - bu siparis icin daha once bildirim
+    // gonderilmis/gorev olusturulmussa burada dur, tekrar gonderme.
+    if (orderNumber) {
+      const izinVerildi = await kargoBildirimKilidiAl(orderNumber);
+      if (!izinVerildi) {
+        console.log("FULFILLMENT: bu siparis icin kargo bildirimi zaten gonderilmis, mukerrer webhook - atlaniyor:", orderNumber);
+        return res.status(200).send("OK - zaten bildirildi, atlandi");
+      }
+    }
+
     if (!phone) {
       console.error("FULFILLMENT: telefon yok, mesaj gonderilemedi");
       // Telefon yoksa bile Sheets'e neden gonderilemedigini yaz
