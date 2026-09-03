@@ -1,3 +1,13 @@
+// api/chat.js
+// 2026-09-03 GUVENLIK DUZELTMESI: bu uc noktada hicbir secret/yetki kontrolu
+// yoktu - URL'yi bilen HERKES, bizim ANTHROPIC_API_KEY kotamizi/butcemizi
+// kullanarak serbest metin gonderip Claude'dan cevap alabilirdi (dogrudan
+// para riski). Artik diger dosyalarla AYNI ?secret=... kontrolu yapiliyor.
+// ONEMLI: Bu dosyayi cagiran TEK yer api/webhook-process.js - o dosyadaki
+// cagri da ayni anda ?secret=... eklenecek sekilde guncellendi, aksi halde
+// musteri WhatsApp mesajlarina bot cevap veremez hale gelirdi.
+const SECRET = "masajur_yakkoholding_2128";
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -8,6 +18,13 @@ module.exports = async (req, res) => {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
+
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) {
+    console.error("CHAT: gecersiz secret");
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   try {
     const { message, history } = req.body;
     const messages = [];
