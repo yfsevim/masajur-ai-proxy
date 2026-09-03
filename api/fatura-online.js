@@ -4,7 +4,17 @@
 //
 // Shopify'da AYRI bir webhook olarak tanimlanir:
 //   Olay: Order payment / orders/paid
-//   URL:  https://masajur-ai-proxy.vercel.app/api/fatura-online
+//   URL:  https://masajur-ai-proxy.vercel.app/api/fatura-online?secret=masajur_yakkoholding_2128
+//
+// 2026-09-03 GUVENLIK DUZELTMESI: bu dosyada digerlerinin (fulfillment.js,
+// fatura-baslat.js, teslim-kontrol.js) aksine HICBIR secret/yetki kontrolu
+// yoktu - URL'yi bilen HERKES, gercek bir odeme olmadan, istedigi siparis
+// numarasi icin fatura-kes.js'i dogrudan tetikleyebilirdi. Bu, "asla yanlis
+// fatura kesilmesin" kuralini dogrudan tehdit ediyordu. Artik diger
+// dosyalarla AYNI ?secret=... kontrolu yapiliyor - Shopify'daki webhook
+// URL'sinin sonuna ?secret=masajur_yakkoholding_2128 eklenmesi GEREKIR,
+// aksi halde Shopify'in gercek "odeme yapildi" bildirimleri de 401 ile
+// reddedilir.
 //
 // NOT: Kapida odeme (COD) siparisleri bu webhook'u tetiklemez (COD'da odeme
 // online tahsil edilmedigi icin Shopify "orders/paid" olayini COD siparisler
@@ -49,6 +59,12 @@ async function triggerFaturaHemen(orderNumber) {
 
 module.exports = async (req, res) => {
   if (req.method !== "POST") return res.status(200).send("OK");
+
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) {
+    console.error("FATURA-ONLINE: gecersiz secret");
+    return res.status(401).send("Unauthorized");
+  }
 
   try {
     const order = req.body || {};
