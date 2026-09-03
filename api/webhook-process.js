@@ -15,6 +15,12 @@
 // + Mukerrer isleme korumasi (Redis kilidi, wamid bazli): QStash veya Meta
 //   ayni mesaji birden fazla kez teslim etse bile bot ayni soruya sadece
 //   BIR KERE cevap yazar.
+//
+// 2026-09-03 GUVENLIK DUZELTMESI: api/chat.js'e artik secret kontrolu
+// eklendi (daha once o uc nokta acikta, kimse kontrol etmeden herkes
+// kullanabiliyordu). Bu dosya chat.js'i cagiran TEK yer oldugu icin,
+// asagidaki cagriya da ayni SECRET eklendi - aksi halde musteri mesajlarina
+// bot cevap veremez hale gelirdi.
 
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
@@ -340,7 +346,7 @@ module.exports = async (req, res) => {
     let reply = "Yanıt oluşturulamadı.";
     try {
       const claudeData = await jsonFetch(
-        BASE + "/api/chat",
+        BASE + "/api/chat?secret=" + SECRET,
         { message: claudeMessage, history: history },
         9000
       );
