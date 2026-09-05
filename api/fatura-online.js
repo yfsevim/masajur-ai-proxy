@@ -24,8 +24,28 @@
 // Guvenlik icin ekstra bir kontrol de yapiyoruz: gelen siparisin odeme tipi
 // gercekten "kapida odeme" ise (COD), YANLISLIKLA hemen fatura KESMIYORUZ -
 // COD siparislerin faturasi sadece teslim-kontrol.js zincirinden gecmeli.
+//
+// 2026-09-05 DUZELTME: fatura-kes.js'e giden istegin HICBIR zaman asimi
+// yoktu (ciplak fetch) - hesap artik Vercel Pro'da ve fatura-kes.js'in
+// kendisi (yeni, bollastirilmis haliyle) en kotu senaryoda ~60sn surebiliyor;
+// bu dosyanin da o kadar sabirli olmasi ve kendi calisma suresinin
+// (vercel.json'da artik acikca 70sn) buna yetecek kadar olmasi gerekiyor -
+// aksi halde Vercel bu fonksiyonu fatura-kes.js daha cevap vermeden
+// oldurebilir (fatura-kes.js kendi basina calismaya devam eder, bu yuzden
+// mukerrer fatura riski yok, ama "FATURA-ONLINE HATA" gibi gereksiz log
+// gurultusune yol acabilir).
 
 const SECRET = "masajur_yakkoholding_2128";
+
+async function fetchWithTimeout(url, options, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function isKapidaOdeme(order) {
   const gateways = (order.payment_gateway_names || []).join(" ").toLowerCase();
@@ -48,11 +68,11 @@ function extractOrderNumber(order) {
 
 async function triggerFaturaHemen(orderNumber) {
   const url = "https://masajur-ai-proxy.vercel.app/api/fatura-kes?secret=" + SECRET;
-  const resp = await fetch(url, {
+  const resp = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ orderNumber: orderNumber })
-  });
+  }, 60000);
   const data = await resp.json().catch(() => ({}));
   console.log("FATURA-ONLINE: fatura-kes tetiklendi:", JSON.stringify(data));
 }
