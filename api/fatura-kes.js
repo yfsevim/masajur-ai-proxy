@@ -26,12 +26,17 @@
 // GERCEKTEN kesilmis oluyor ama sistem bunu hic bilmiyor, sonraki bir
 // tetiklemede (tarama veya tekrar deneme) AYNI siparise IKINCI bir GERCEK
 // fatura kesiliyor. Cozum: (1) Shopify siparis sorgusu ile Mysoft token
-// alma islemini ARTIK SIRAYLA degil AYNI ANDA (paralel) yapiyoruz, (2) alt
-// islemlerin zaman asimi sureleri kisaltildi (toplam en kotu senaryo suresi
-// ~41 saniyeye dustu, eskiden ~67 saniyeydi), (3) en kritik adim olan Redis
-// koruma bayragi yazimina KISA bir tekrar deneme eklendi ki gecici bir ag
-// hatasinda bile kaybolmasin. Ayrica hesap artik Vercel Pro'da (maxDuration
-// 60 -> 120), bu degisikliklerle birlikte cifte guvenlik saglaniyor.
+// alma islemini ARTIK SIRAYLA degil AYNI ANDA (paralel) yapiyoruz - bu HER
+// ZAMAN net kazanc, aksi bir yani yok, (2) en kritik adim olan Redis koruma
+// bayragi yazimina KISA bir tekrar deneme eklendi ki gecici bir ag hatasinda
+// bile kaybolmasin. Hesap artik Vercel Pro'da (bu fonksiyon icin maxDuration
+// 180 saniye) - bu yuzden alt islemlerin zaman asimi sureleri ESKI (Hobby
+// planindaki gibi sikistirilmis) degerlere DEGIL, tam tersine BOL tutuldu:
+// amac artik "60 saniyeye sigsin" degil, "gercekten yavas ama basarili
+// olabilecek bir Shopify/Mysoft/Sheets cagrisini ERKEN VE YANLISLIKLA hata
+// sayip gereksiz 'belirsiz durum'/tekrar deneme dongusune girmemek". Toplam
+// en kotu senaryo suresi (~60 saniye) hala 180 saniyelik sinirin cok altinda,
+// yani bol bir guvenlik payi var.
 
 const SECRET = "masajur_yakkoholding_2128";
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
@@ -125,8 +130,8 @@ async function fetchWithTimeout(url, options, ms) {
 
 // 2026-09-05 DUZELTME: iki olasi isim formatini ("#12703" ve "12703") ARTIK
 // SIRAYLA degil AYNI ANDA deniyoruz - eskiden ikinci deneme sadece ilki basarisiz
-// olunca baslardi (en kotu durumda 2x6sn = 12sn), artik ikisi paralel oldugu
-// icin en kotu durumda tek bir 6sn'lik bekleme yeterli.
+// olunca baslardi (en kotu durumda 2x8sn = 16sn), artik ikisi paralel oldugu
+// icin en kotu durumda tek bir 10sn'lik bekleme yeterli.
 async function getShopifyOrder(orderNumber) {
   const clean = String(orderNumber).replace(/[^0-9]/g, "");
   const fields = "id,name,email,phone,financial_status,fulfillment_status,cancelled_at," +
@@ -140,7 +145,7 @@ async function getShopifyOrder(orderNumber) {
     try {
       const r = await fetchWithTimeout(url, {
         headers: { "X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json" }
-      }, 6000);
+      }, 10000);
       if (!r.ok) return null;
       const data = await r.json().catch(() => ({}));
       return (data.orders && data.orders[0]) || null;
@@ -168,7 +173,7 @@ async function tagOrderAsInvoiced(order) {
       method: "PUT",
       headers: { "X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json" },
       body: JSON.stringify({ order: { id: order.id, tags: existingTags.join(", ") } })
-    }, 6000);
+    }, 10000);
     if (!r.ok) {
       const errText = await r.text().catch(() => "");
       console.error("FATURA-KES: Shopify etiketleme basarisiz HTTP " + r.status + ": " + errText.slice(0, 300));
@@ -200,7 +205,7 @@ async function logFaturaToSheets(orderNumber, tip, aliciAdi, tutar, status) {
     // HATA TURUNDE TEKRAR DENEMIYORUZ (teslim-kontrol.js/yorum.js'teki diger
     // Sheets loglama fonksiyonlariyla AYNI, tek seferlik davranisa getirildi).
     try {
-      const resp = await fetchWithTimeout(process.env.SHEETS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body }, 8000);
+      const resp = await fetchWithTimeout(process.env.SHEETS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body }, 15000);
       if (!resp.ok) {
         console.error("FATURA SHEETS LOG: HTTP " + resp.status + " - satir Sheets'e yazilmis OLABILIR, mukerrer kayit riski yuzunden TEKRAR DENENMIYOR:", orderNumber);
       }
@@ -236,7 +241,7 @@ async function getMysoftAccessToken() {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: params.toString()
-  }, 6000);
+  }, 10000);
 
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok || !data.access_token) {
@@ -384,7 +389,7 @@ async function mysoftFaturaOlustur(payload) {
         "Content-Type": "application/json"
       },
       body: JSON.stringify(invoiceOutboxModel)
-    }, 20000);
+    }, 25000);
   } catch (e) {
     const zamanAsimiMi = e && (e.name === "AbortError" || /abort/i.test(e.message || ""));
     return {
