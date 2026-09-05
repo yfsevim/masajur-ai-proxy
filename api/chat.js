@@ -14,6 +14,17 @@
 // 502 donuluyor, boylece webhook-process.js dogru "yogunluk" mesajini
 // gonderebiliyor. Sorunun asil kaynagi (ornegin ANTHROPIC_API_KEY / kota /
 // bakiye) Vercel loglarindan veya Anthropic konsolundan kontrol edilmeli.
+//
+// 2026-09-05 GUVENLIK KONTROLU GERI EKLENDI: bu dosyada daha once ?secret=...
+// korumasi vardi (URL'yi bilen herkesin Anthropic kotamizi/parasini
+// harcayarak dogrudan /api/chat'i cagirmasini engellemek icin), ama
+// elimdeki eski bir kopya uzerinden yapilan bir onceki duzeltme yanlislikla
+// bu korumayi kaldirmisti. Simdi diger tum dosyalarla (fatura-online.js,
+// webhook-process.js, teslim-kontrol.js vb.) AYNI desenle geri eklendi.
+// Bunu cagiran TEK yer olan webhook-process.js zaten ?secret=... ekleyerek
+// cagiriyor (bkz. o dosyadaki 2026-09-05 ucuncu duzeltme notu).
+const SECRET = "masajur_yakkoholding_2128";
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -24,6 +35,13 @@ module.exports = async (req, res) => {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
+
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) {
+    console.error("CHAT: gecersiz secret");
+    return res.status(401).send("Unauthorized");
+  }
+
   try {
     const { message, history } = req.body;
     const messages = [];
