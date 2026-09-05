@@ -29,6 +29,16 @@
 // bu da teorik olarak fonksiyonu sonsuza kadar bekletip QStash'in mesaji
 // tekrar denemesine (ve mukerrer cevaba) yol acabilirdi; artik diger tum
 // WhatsApp cagrilarindaki gibi zaman asimli (15sn) yapiliyor.
+//
+// 2026-09-05 IKINCI (KRITIK) DUZELTME: jsonFetch() basarisiz HTTP
+// durumlarini (4xx/5xx) kontrol etmiyordu, bu yuzden /api/chat herhangi bir
+// nedenle (Anthropic API hatasi, gecersiz cevap, coken istek) basarisiz
+// oldugunda, gercek musteriye GUZEL "yogunluk" mesaji DEGIL, chat.js'in ic
+// fallback metni olan cıplak "Yanıt oluşturulamadı." yazisi WHATSAPP
+// CEVABI OLARAK gonderiliyordu. Artik jsonFetch basarisiz HTTP durumunda
+// hata firlatiyor, boylece asagidaki catch bloku devreye girip dogru
+// "yogunluk" mesajini gonderiyor. Ayrica bkz. api/chat.js'teki es zamanli
+// duzeltme (Anthropic cevabini kontrol etme).
 
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
@@ -157,6 +167,18 @@ async function jsonFetch(url, body, ms) {
     },
     ms
   );
+  // 2026-09-05 KRITIK DUZELTME: resp.ok kontrolu YOKTU - /api/chat hata
+  // durumunda (Anthropic API'den 401/429/5xx veya kendi catch'inde 500)
+  // yine de 200 sanip JSON'u okuyorduk. Ozellikle /api/chat cagrisinda bu,
+  // musteriye asagidaki guzel "yogunluk" mesaji yerine chat.js'in ic
+  // fallback metni olan cıplak "Yanıt oluşturulamadı." yazisinin GERCEK
+  // WHATSAPP CEVABI olarak gitmesine yol aciyordu. Artik basarisiz HTTP
+  // durumunda hata firlatiliyor, boylece asagidaki catch bloklari (ve
+  // /api/chat cagrisi icin dogru "yogunluk" mesaji) devreye giriyor.
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    throw new Error("HTTP " + resp.status + " " + url + ": " + errText.slice(0, 300));
+  }
   return await resp.json();
 }
 
