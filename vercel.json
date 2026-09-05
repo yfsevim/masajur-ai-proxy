@@ -2,6 +2,7 @@
   "functions": {
     "api/teslim-kontrol.js": { "maxDuration": 180 },
     "api/fatura-kes.js": { "maxDuration": 180 },
-    "api/webhook-process.js": { "maxDuration": 90 }
+    "api/webhook-process.js": { "maxDuration": 90 },
+    "api/yorum.js": { "maxDuration": 60 }
   }
 }
