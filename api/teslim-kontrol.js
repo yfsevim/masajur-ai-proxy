@@ -15,6 +15,18 @@
 // Yurtici Kargo sorgusu artik ../lib/yurtici.js'deki ORTAK istemciyi kullanir
 // (webhook-process.js, teslim-kontrol.js ve yorum.js ayni koddan besleniyor).
 //
+// 2026-09-05 DUZELTME: hesap artik Vercel Pro'da (bu fonksiyon icin
+// maxDuration 180sn). Eskiden fatura-kes.js'e ve Sheets/WhatsApp'a giden
+// istekler sikistirilmis zaman asimlariyla yapiliyordu - Yurtici/Mysoft
+// hafif yavas oldugunda bile istek ERKEN kesilip gereksiz "ulasilamadi"
+// alarmi/hata sayilabiliyordu. Asagidaki fetchWithTimeout cagrilarinin
+// sureleri bu yuzden bollastirildi (triggerFatura: 25sn->60sn, Sheets
+// loglama: 8sn->15sn, teslim-basarisiz WhatsApp mesaji: 8sn->12sn, tarama'nin
+// Shopify siparis listesi cekme: 15sn->20sn). Tarama modunun kendi ic
+// mantigi (parti buyuklugu, kac gun geriye bakildigi, tekrar deneme araligi)
+// DEGISTIRILMEDI - sadece "gercekten calisiyor ama yavas olan bir istegi
+// yanlislikla basarisiz saymamak" icin sureler arttirildi.
+
 // GUVENLIK AGI (TARAMA MODU) - 2026-09-02'de eklendi:
 // fatura-baslat.js'in Shopify webhook'u ara sira bir siparisi hic
 // tetiklemeyebiliyor (webhook'lar %100 garantili degildir). Bu durumda
@@ -174,7 +186,7 @@ async function triggerFatura(orderNumber) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ orderNumber: orderNumber })
-    }, 25000);
+    }, 60000);
     const data = await resp.json().catch(() => ({}));
     console.log("TESLIM-KONTROL: fatura-kes tetiklendi:", JSON.stringify(data));
   } catch (e) {
@@ -232,7 +244,7 @@ async function logTeslimBasarisizToSheets(phone, name, orderNumber, branch, stat
         branch: branch,
         status: status
       })
-    }, 8000);
+    }, 15000);
   } catch (e) {
     console.error("TESLIM-KONTROL: teslim-basarisiz Sheets log HATA:", e && e.message ? e.message : e);
   }
@@ -270,7 +282,7 @@ async function sendTeslimBasarisizMesaji(phone, name, orderNumber, branch) {
           }
         })
       },
-      8000
+      12000
     );
     const data = await resp.json().catch(() => ({}));
     console.log("TESLIM-KONTROL: teslim-basarisiz mesaji sonucu:", JSON.stringify(data));
@@ -300,7 +312,7 @@ async function logTeslimAlarmToSheets(orderNumber, deneme, status) {
         deneme: deneme,
         status: status || "5 GUN GECTI - TESLIM ONAYLANAMADI - FATURA KESILMEDI - MANUEL KONTROL GEREKLI"
       })
-    }, 8000);
+    }, 15000);
     console.log("TESLIM-KONTROL: alarm Sheets'e kaydedildi:", orderNumber);
   } catch (e) {
     console.error("TESLIM-KONTROL ALARM LOG HATA:", e && e.message ? e.message : e);
@@ -362,7 +374,7 @@ async function fetchTumSiparisler(gunler) {
     sayfa++;
     const r = await fetchWithTimeout(url, {
       headers: { "X-Shopify-Access-Token": process.env.SHOPIFY_TOKEN, "Content-Type": "application/json" }
-    }, 15000);
+    }, 20000);
     if (!r.ok) {
       console.error("TARAMA: Shopify siparis listesi alinamadi, HTTP", r.status);
       break;
@@ -406,7 +418,7 @@ async function logTaramaOzetToSheets(ozet) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "tarama", status: ozet })
-    }, 8000);
+    }, 15000);
   } catch (e) {}
 }
 
