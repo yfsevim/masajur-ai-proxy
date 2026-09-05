@@ -1,13 +1,19 @@
-// api/chat.js
-// 2026-09-03 GUVENLIK DUZELTMESI: bu uc noktada hicbir secret/yetki kontrolu
-// yoktu - URL'yi bilen HERKES, bizim ANTHROPIC_API_KEY kotamizi/butcemizi
-// kullanarak serbest metin gonderip Claude'dan cevap alabilirdi (dogrudan
-// para riski). Artik diger dosyalarla AYNI ?secret=... kontrolu yapiliyor.
-// ONEMLI: Bu dosyayi cagiran TEK yer api/webhook-process.js - o dosyadaki
-// cagri da ayni anda ?secret=... eklenecek sekilde guncellendi, aksi halde
-// musteri WhatsApp mesajlarina bot cevap veremez hale gelirdi.
-const SECRET = "masajur_yakkoholding_2128";
-
+// 2026-09-05 KRITIK DUZELTME: bu dosya Anthropic API'den gelen cevabin
+// basarili olup olmadigini HIC KONTROL ETMIYORDU - "response.ok" bakilmadan
+// direkt data.content okunuyordu. Anthropic tarafinda GECICI bir sorun
+// olsa bile (rate limit/429, gecici 5xx, API anahtari sorunu, hatta bir
+// network hatasi disinda dogrudan hata govdesi donen her durum) bu kod
+// sessizce "Yanıt oluşturulamadı." metnini basarili bir cevapmis gibi 200
+// ile donduruyordu - ki bu metin webhook-process.js tarafindan hicbir
+// filtreye takilmadan GERCEK MUSTERIYE WHATSAPP CEVABI OLARAK gonderiliyordu
+// (webhook-process.js'in guzel "yogunluk yasiyoruz" fallback mesaji sadece
+// bu fonksiyon TAMAMEN cevap veremezse/zaman asimina ugrarsa devreye
+// giriyordu, 200+bos-cevap durumunda degil). Artik: (1) Anthropic'in HTTP
+// durumu kontrol ediliyor, (2) cevapta gercek bir metin yoksa da hata
+// sayiliyor - her iki durumda da asil hata (durum kodu + govde) loglanip
+// 502 donuluyor, boylece webhook-process.js dogru "yogunluk" mesajini
+// gonderebiliyor. Sorunun asil kaynagi (ornegin ANTHROPIC_API_KEY / kota /
+// bakiye) Vercel loglarindan veya Anthropic konsolundan kontrol edilmeli.
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -18,13 +24,6 @@ module.exports = async (req, res) => {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
-
-  const secret = req.query && req.query.secret;
-  if (secret !== SECRET) {
-    console.error("CHAT: gecersiz secret");
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
   try {
     const { message, history } = req.body;
     const messages = [];
@@ -218,11 +217,23 @@ Müşteri satın almak istediğini belirtirse, onu doğal şekilde siparişe yö
         messages: messages
       })
     });
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => "");
+      console.error("CHAT.JS: Anthropic API hatasi:", response.status, errBody.slice(0, 500));
+      return res.status(502).json({ error: "anthropic_api_error", status: response.status });
+    }
+
     const data = await response.json();
-    return res.status(200).json({
-      reply: data.content?.[0]?.text || "Yanıt oluşturulamadı."
-    });
+    const replyText = data.content?.[0]?.text;
+
+    if (!replyText) {
+      console.error("CHAT.JS: Anthropic cevabinda metin yok:", JSON.stringify(data).slice(0, 500));
+      return res.status(502).json({ error: "empty_reply" });
+    }
+
+    return res.status(200).json({ reply: replyText });
   } catch (error) {
+    console.error("CHAT.JS HATA:", error && error.message ? error.message : error);
     return res.status(500).json({ error: error.message });
   }
 };
