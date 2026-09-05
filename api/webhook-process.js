@@ -380,8 +380,14 @@ module.exports = async (req, res) => {
       // bir yogunluk olmasa bile asagidaki hazir "yogunluk" mesajini goruyordu.
       // Hesap artik Vercel Pro'da ve bu fonksiyonun toplam suresi 90sn oldugu
       // icin 40sn'lik bir bekleme rahatlikla sigiyor.
+      // 2026-09-05 UCUNCU (ASIL) DUZELTME: chat.js'e daha once eklenen
+      // ?secret=... korumasi bu cagriya hic eklenmemisti - bu yuzden HER
+      // musteri mesajinda chat.js 401 "gecersiz secret" donuyor, bot da
+      // (yukaridaki iki duzeltmeden once) bunu sessizce "Yanıt
+      // oluşturulamadı." olarak musteriye yolluyordu. Asil kok sebep
+      // buydu - Anthropic API ile ilgisi yoktu.
       const claudeData = await jsonFetch(
-        BASE + "/api/chat",
+        BASE + "/api/chat?secret=" + SECRET,
         { message: claudeMessage, history: history },
         40000
       );
