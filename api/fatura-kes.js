@@ -14,6 +14,24 @@
 // kontrol edilip loglaniyor, (2) "zaten faturalandi mi" kontrolu ARTIK
 // Shopify etiketine ek olarak Redis'teki KALICI bir bayraga da bakiyor -
 // boylece Shopify etiketleme basarisiz olsa bile mukerrer fatura kesilmez.
+//
+// 2026-09-05 KRITIK DUZELTME (#12703 ve #12590 vakalari - GERCEK mukerrer
+// e-Arsiv fatura kesilmis, Mysoft panelinden dogrulandi): eski kod, Shopify
+// sorgusu + Mysoft token alma + fatura kesme + Shopify etiketleme + Sheets
+// loglama islemlerini SIRAYLA yapiyordu; en kotu senaryoda toplam sure
+// Vercel'in (o zamanki Hobby plan) 60 saniyelik maxDuration sinirina cok
+// yaklasiyor, hatta asabiliyordu. Eger Vercel fonksiyonu TAM Mysoft'tan
+// "fatura olustu" cevabi geldikten SONRA ama bizim koruma bayragini
+// (isaretleFaturalandi) Redis'e yazmadan ONCE zorla durdurursa: fatura
+// GERCEKTEN kesilmis oluyor ama sistem bunu hic bilmiyor, sonraki bir
+// tetiklemede (tarama veya tekrar deneme) AYNI siparise IKINCI bir GERCEK
+// fatura kesiliyor. Cozum: (1) Shopify siparis sorgusu ile Mysoft token
+// alma islemini ARTIK SIRAYLA degil AYNI ANDA (paralel) yapiyoruz, (2) alt
+// islemlerin zaman asimi sureleri kisaltildi (toplam en kotu senaryo suresi
+// ~41 saniyeye dustu, eskiden ~67 saniyeydi), (3) en kritik adim olan Redis
+// koruma bayragi yazimina KISA bir tekrar deneme eklendi ki gecici bir ag
+// hatasinda bile kaybolmasin. Ayrica hesap artik Vercel Pro'da (maxDuration
+// 60 -> 120), bu degisikliklerle birlikte cifte guvenlik saglaniyor.
 
 const SECRET = "masajur_yakkoholding_2128";
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
@@ -51,12 +69,33 @@ async function faturalandiMi(orderNumber) {
     return false; // Redis erisilemezse guvenli taraf: eskisi gibi devam et (Shopify etiketine bak)
   }
 }
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+// 2026-09-05 EKLENDI: bu, GERCEK bir mukerrer fatura kesilmesini onleyen
+// EN KRITIK yazma islemi - bu basarisiz olursa sistem faturanin kesildigini
+// hic bilemez ve ayni siparise ikinci bir gercek fatura kesebilir (#12703,
+// #12590 vakalari). Tek seferlik denemede gecici bir ag/DNS hatasi bile
+// mukerrer faturaya yol acabildigi icin artik kisa araliklarla 3 kez deneniyor.
 async function isaretleFaturalandi(orderNumber) {
-  try {
-    await redis.set(FATURALANDI_REDIS_PREFIX + orderNumber, "1"); // suresiz, hic silinmez
-  } catch (e) {
-    console.error("FATURA-KES: Redis 'faturalandi' bayragi yazilamadi:", orderNumber, e && e.message ? e.message : e);
+  for (let deneme = 1; deneme <= 3; deneme++) {
+    try {
+      await redis.set(FATURALANDI_REDIS_PREFIX + orderNumber, "1"); // suresiz, hic silinmez
+      return true;
+    } catch (e) {
+      console.error("FATURA-KES: Redis 'faturalandi' bayragi yazilamadi (deneme " + deneme + "/3):", orderNumber, e && e.message ? e.message : e);
+      if (deneme < 3) await sleep(300 * deneme);
+    }
   }
+  // 3 deneme de basarisiz oldu - "hicbir sey sessizce kaybolmasin" ilkesi geregi
+  // en azindan bunu ayri, dikkat cekici bir alarm olarak Sheets'e dusuyoruz.
+  await logFaturaToSheets(orderNumber, "-", "-", "-",
+    "KRITIK ALARM: fatura Mysoft'ta kesildi AMA koruma bayragi Redis'e 3 denemede de YAZILAMADI - " +
+    "bu siparis icin MUKERRER FATURA riski var, MUTLAKA Mysoft panelinden kontrol edin ve gerekirse " +
+    "Redis'e elle 'fatura-kesildi:" + orderNumber + "' anahtarini ekleyin.");
+  return false;
 }
 
 const VKN_TCKN_ATTRIBUTE_NAMES = [
@@ -84,6 +123,10 @@ async function fetchWithTimeout(url, options, ms) {
   }
 }
 
+// 2026-09-05 DUZELTME: iki olasi isim formatini ("#12703" ve "12703") ARTIK
+// SIRAYLA degil AYNI ANDA deniyoruz - eskiden ikinci deneme sadece ilki basarisiz
+// olunca baslardi (en kotu durumda 2x6sn = 12sn), artik ikisi paralel oldugu
+// icin en kotu durumda tek bir 6sn'lik bekleme yeterli.
 async function getShopifyOrder(orderNumber) {
   const clean = String(orderNumber).replace(/[^0-9]/g, "");
   const fields = "id,name,email,phone,financial_status,fulfillment_status,cancelled_at," +
@@ -94,17 +137,23 @@ async function getShopifyOrder(orderNumber) {
 
   async function fetchByName(name) {
     const url = `${base}?status=any&name=${encodeURIComponent(name)}&fields=${fields}`;
-    const r = await fetchWithTimeout(url, {
-      headers: { "X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json" }
-    }, 8000);
-    if (!r.ok) return null;
-    const data = await r.json().catch(() => ({}));
-    return (data.orders && data.orders[0]) || null;
+    try {
+      const r = await fetchWithTimeout(url, {
+        headers: { "X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json" }
+      }, 6000);
+      if (!r.ok) return null;
+      const data = await r.json().catch(() => ({}));
+      return (data.orders && data.orders[0]) || null;
+    } catch (e) {
+      return null;
+    }
   }
 
-  let order = await fetchByName(`#${clean}`);
-  if (!order) order = await fetchByName(clean);
-  return order;
+  const [byHash, byPlain] = await Promise.all([
+    fetchByName(`#${clean}`),
+    fetchByName(clean)
+  ]);
+  return byHash || byPlain || null;
 }
 
 // DUZELTME: artik PUT istegin sonucunu kontrol edip logluyor - once sessizce
@@ -119,7 +168,7 @@ async function tagOrderAsInvoiced(order) {
       method: "PUT",
       headers: { "X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json" },
       body: JSON.stringify({ order: { id: order.id, tags: existingTags.join(", ") } })
-    }, 8000);
+    }, 6000);
     if (!r.ok) {
       const errText = await r.text().catch(() => "");
       console.error("FATURA-KES: Shopify etiketleme basarisiz HTTP " + r.status + ": " + errText.slice(0, 300));
@@ -151,7 +200,7 @@ async function logFaturaToSheets(orderNumber, tip, aliciAdi, tutar, status) {
     // HATA TURUNDE TEKRAR DENEMIYORUZ (teslim-kontrol.js/yorum.js'teki diger
     // Sheets loglama fonksiyonlariyla AYNI, tek seferlik davranisa getirildi).
     try {
-      const resp = await fetchWithTimeout(process.env.SHEETS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body }, 15000);
+      const resp = await fetchWithTimeout(process.env.SHEETS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body }, 8000);
       if (!resp.ok) {
         console.error("FATURA SHEETS LOG: HTTP " + resp.status + " - satir Sheets'e yazilmis OLABILIR, mukerrer kayit riski yuzunden TEKRAR DENENMIYOR:", orderNumber);
       }
@@ -187,7 +236,7 @@ async function getMysoftAccessToken() {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: params.toString()
-  }, 8000);
+  }, 6000);
 
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok || !data.access_token) {
@@ -210,6 +259,9 @@ async function mysoftFaturaOlustur(payload) {
     return { basarili: false, testModu: true, mesaj: "Mysoft API bilgisi henuz tanimlanmadi" };
   }
 
+  // 2026-09-05: token cogunlukla ONCEDEN (handler'in basinda, Shopify siparis
+  // sorgusuyla PARALEL) cekilip cache'e konmus oluyor - burada tekrar cagirmak
+  // cogunlukla cache'ten aninda donuyor, ekstra bekleme yaratmiyor.
   const token = await getMysoftAccessToken();
 
   const now = new Date();
@@ -504,7 +556,18 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: true, reason: "ambiguous_pending_manual_review" });
     }
 
-    const order = await getShopifyOrder(orderNumber);
+    // 2026-09-05: Shopify siparis sorgusu ile Mysoft token alma islemini ARTIK
+    // AYNI ANDA baslatiyoruz (ikisi birbirinden bagimsiz) - eskiden sirayla
+    // yapildigi icin toplam sureye gereksiz yere ekleniyordu. Token alma
+    // basarisiz olursa burada sessizce yutuluyor, mysoftFaturaOlustur() zaten
+    // kendi icinde tekrar deneyecek (cache bos kalirsa).
+    const [order] = await Promise.all([
+      getShopifyOrder(orderNumber),
+      getMysoftAccessToken().catch(e => {
+        console.error("FATURA-KES: on-yukleme token alinamadi (mysoftFaturaOlustur tekrar deneyecek):", e && e.message ? e.message : e);
+      })
+    ]);
+
     if (!order) {
       console.error("FATURA-KES: siparis bulunamadi:", orderNumber);
       await logFaturaToSheets(orderNumber, "-", "-", "-", "ALARM: Shopify'da siparis bulunamadi - manuel kontrol gerekli");
@@ -538,7 +601,11 @@ module.exports = async (req, res) => {
     const sonuc = await mysoftFaturaOlustur(payload);
 
     if (sonuc.basarili) {
-      await isaretleFaturalandi(orderNumber); // Redis'teki kalici kayit - once bu, Shopify'a ne olursa olsun garanti
+      // KRITIK SIRA: fatura GERCEKTEN kesildi - buradan sonraki HER SEYDEN
+      // once koruma bayragini yaziyoruz (artik 3 denemeli, bkz. yukarida).
+      // Vercel fonksiyonu bundan SONRA zorla durdurulsa bile (etiketleme veya
+      // Sheets loglama sirasinda) mukerrer fatura riski kalmaz.
+      await isaretleFaturalandi(orderNumber);
       await tagOrderAsInvoiced(order);
       await logFaturaToSheets(orderNumber, faturaTipi, payload.aliciUnvanAdSoyad, payload.genelToplam,
         "KESILDI OK - Fatura No: " + (sonuc.faturaNo || "-") + " ETTN: " + (sonuc.faturaEttn || "-"));
