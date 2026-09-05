@@ -2,8 +2,9 @@
 // QStash tarafindan (webhook.js'in devrettigi) cagrilir. Asil is burada:
 // Shopify siparis + Yurtici kargo + Claude -> WhatsApp cevabi.
 // Bu dosyanin webhook.js'den ayri olmasinin tek sebebi: Meta'nin 5sn
-// kuralindan bagimsiz olarak, Yurtici yavas oldugunda bile rahat calisabilsin
-// (vercel.json'da bu fonksiyona 45sn suresi tanimli).
+// kuralindan bagimsiz olarak, Yurtici/Claude yavas oldugunda bile rahat
+// calisabilsin (vercel.json'da bu fonksiyona artik 90sn suresi tanimli -
+// hesap Vercel Pro'da, bkz. 2026-09-05 notu asagida).
 //
 // Yurtici Kargo sorgusu artik ../lib/yurtici.js'deki ORTAK istemciyi kullanir
 // (webhook-process.js, teslim-kontrol.js ve yorum.js ayni koddan besleniyor -
@@ -16,11 +17,18 @@
 //   ayni mesaji birden fazla kez teslim etse bile bot ayni soruya sadece
 //   BIR KERE cevap yazar.
 //
-// 2026-09-03 GUVENLIK DUZELTMESI: api/chat.js'e artik secret kontrolu
-// eklendi (daha once o uc nokta acikta, kimse kontrol etmeden herkes
-// kullanabiliyordu). Bu dosya chat.js'i cagiran TEK yer oldugu icin,
-// asagidaki cagriya da ayni SECRET eklendi - aksi halde musteri mesajlarina
-// bot cevap veremez hale gelirdi.
+// 2026-09-05 DUZELTME (musterilerin gordugu "kisa bir yogunluk yasiyoruz"
+// mesaji cok sik cikiyordu): Claude'a (chat.js) giden ic istege sadece 9
+// SANIYE sure taniniyordu - yapay zeka cevabi (ozellikle uzun cevaplarda
+// veya yogun saatlerde) bundan kolayca uzun surebiliyor, bu da GERCEK bir
+// yogunluk olmasa bile musteriye otomatik "yogunluk" mesaji gitmesine yol
+// aciyordu. Hesap artik Vercel Pro'da ve bu fonksiyonun suresi 90 saniyeye
+// cikarildigi icin: (1) chat.js'e taninan sure 9sn -> 40sn'ye cikarildi,
+// (2) musteriye giden asil WhatsApp cevabi gonderimi eskiden HICBIR zaman
+// asimi olmadan (sinirsiz bekleyebilen ciplak bir fetch ile) yapiliyordu -
+// bu da teorik olarak fonksiyonu sonsuza kadar bekletip QStash'in mesaji
+// tekrar denemesine (ve mukerrer cevaba) yol acabilirdi; artik diger tum
+// WhatsApp cagrilarindaki gibi zaman asimli (15sn) yapiliyor.
 
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
@@ -163,7 +171,7 @@ async function logToSheets(phone, message, reply) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: phone, message: message, reply: reply })
       },
-      4000
+      8000
     );
   } catch (e) {
     console.error("SHEETS LOG HATA:", e && e.message ? e.message : e);
@@ -273,7 +281,7 @@ module.exports = async (req, res) => {
     if (orderNumber) {
       console.log("SIPARIS SORGUSU:", orderNumber);
 
-      const sipPromise = jsonFetch(BASE + "/api/siparis", { orderNumber }, 6000)
+      const sipPromise = jsonFetch(BASE + "/api/siparis", { orderNumber }, 8000)
         .then((d) => { console.log("SIPARIS SONUCU:", JSON.stringify(d)); return d; })
         .catch((e) => { console.error("SIPARIS HATA:", e?.message || e); return null; });
 
@@ -345,10 +353,15 @@ module.exports = async (req, res) => {
 
     let reply = "Yanıt oluşturulamadı.";
     try {
+      // 2026-09-05 DUZELTME: 9sn -> 40sn. Eskiden Claude'un cevabi 9 saniyeyi
+      // gecerse (yogun saatlerde/uzun cevaplarda sik oluyordu) musteri GERCEK
+      // bir yogunluk olmasa bile asagidaki hazir "yogunluk" mesajini goruyordu.
+      // Hesap artik Vercel Pro'da ve bu fonksiyonun toplam suresi 90sn oldugu
+      // icin 40sn'lik bir bekleme rahatlikla sigiyor.
       const claudeData = await jsonFetch(
-        BASE + "/api/chat?secret=" + SECRET,
+        BASE + "/api/chat",
         { message: claudeMessage, history: history },
-        9000
+        40000
       );
       reply = claudeData.reply || reply;
     } catch (e) {
@@ -358,7 +371,12 @@ module.exports = async (req, res) => {
 
     console.log("WHATSAPP'A GONDERILIYOR:", reply);
 
-    const whatsappResponse = await fetch(
+    // 2026-09-05 DUZELTME: bu istek eskiden zaman asimi OLMADAN (ciplak
+    // fetch) yapiliyordu - teorik olarak sonsuza kadar askida kalip
+    // fonksiyonu (ve dolayisiyla QStash'in mesaji tekrar denemesini,
+    // mukerrer cevap riskini) tetikleyebilirdi. Artik dosyadaki diger tum
+    // WhatsApp cagrilariyla ayni desende, zaman asimli.
+    const whatsappResponse = await fetchWithTimeout(
       `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
       {
         method: "POST",
@@ -372,7 +390,8 @@ module.exports = async (req, res) => {
           type: "text",
           text: { body: reply }
         })
-      }
+      },
+      15000
     );
 
     const whatsappData = await whatsappResponse.json();
