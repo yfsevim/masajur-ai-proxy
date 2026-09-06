@@ -5,6 +5,16 @@ const redis = Redis.fromEnv();
 const SECRET = "masajur_yakkoholding_2128";
 const TEMPLATE_NAME = "kargo_verildi_v3";
 const TEMPLATE_LANG = "tr";
+// 2026-09-06 YENI OZELLIK: kargo bildirimi sablonundan hemen sonra, AYRI bir
+// WhatsApp sablonuyla urun/kumanda kullanim rehberi de gonderiliyor. Ikisi de
+// Shopify'in fulfillment webhook'undan (musteri bize yazmadan, bizim
+// baslattigimiz) tetiklendigi icin WhatsApp kurallari geregi ONAYLI SABLON
+// olmak zorunda - serbest metin burada KULLANILAMAZ, Meta reddeder. Sablon
+// Meta'da onaylanana kadar gonderim denemesi hata dondurur (asagida
+// yakalanip loglanir, akisi bozmaz). Mukerrer gonderim korumasi icin AYRI
+// bir Redis anahtarina gerek yok - zaten yukarida kargoBildirimKilidiAl()
+// ile siparis basina tek seferlik calisan blogun icinde gonderiliyor.
+const KULLANIM_TEMPLATE_NAME = "urun_kullanim_rehberi_v1";
 
 // 2026-09-03 EKLENDI: Shopify'in "kargoya verildi" webhook'u ayni siparis
 // icin birden fazla kez tetiklenebiliyor (webhook tekrar denemesi, veya
@@ -80,6 +90,42 @@ async function logKargoToSheets(phone, name, orderNumber, product, status) {
     }
   } catch (e) {
     console.error("KARGO SHEETS LOG HATA:", e && e.message ? e.message : e);
+  }
+}
+
+// Urun/kumanda kullanim rehberi sablonunu gonderir.
+async function sendKullanimRehberi(phone, firstName) {
+  try {
+    const waResp = await fetch(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "template",
+          template: {
+            name: KULLANIM_TEMPLATE_NAME,
+            language: { code: TEMPLATE_LANG },
+            components: [
+              {
+                type: "body",
+                parameters: [{ type: "text", text: String(firstName) }]
+              }
+            ]
+          }
+        })
+      }
+    );
+    const waData = await waResp.json();
+    console.log("KULLANIM REHBERI WHATSAPP SONUCU:", JSON.stringify(waData));
+    console.log("KULLANIM REHBERI WA DURUM:", readWaStatus(waData));
+  } catch (e) {
+    console.error("KULLANIM REHBERI GONDERIM HATA:", e && e.message ? e.message : e);
   }
 }
 
@@ -221,6 +267,12 @@ module.exports = async (req, res) => {
 
     // Kargo bildirimini Sheets'e GERCEK gonderim durumuyla kaydet
     await logKargoToSheets(phone, firstName, orderNumber, productName, waStatus);
+
+    // Urun/kumanda kullanim rehberini AYRI sablonla gonder. Yukarida
+    // kargoBildirimKilidiAl() zaten bu siparis icin bu blogun SADECE BIR
+    // KERE calismasini garantiledigi icin burada ayrica bir mukerrer-onleme
+    // kontrolu yapmaya gerek yok.
+    await sendKullanimRehberi(phone, firstName);
 
     // 3 gun sonra yorum kontrolu icin QStash'e gorev birak
     await scheduleYorum(orderNumber, phone, firstName);
