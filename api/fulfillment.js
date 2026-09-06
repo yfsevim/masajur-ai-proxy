@@ -5,16 +5,18 @@ const redis = Redis.fromEnv();
 const SECRET = "masajur_yakkoholding_2128";
 const TEMPLATE_NAME = "kargo_verildi_v3";
 const TEMPLATE_LANG = "tr";
-// 2026-09-06 YENI OZELLIK: kargo bildirimi sablonundan hemen sonra, AYRI bir
+// 2026-09-06 YENI OZELLIK: kargo bildirimi sablonundan sonra, AYRI bir
 // WhatsApp sablonuyla urun/kumanda kullanim rehberi de gonderiliyor. Ikisi de
 // Shopify'in fulfillment webhook'undan (musteri bize yazmadan, bizim
 // baslattigimiz) tetiklendigi icin WhatsApp kurallari geregi ONAYLI SABLON
-// olmak zorunda - serbest metin burada KULLANILAMAZ, Meta reddeder. Sablon
-// Meta'da onaylanana kadar gonderim denemesi hata dondurur (asagida
-// yakalanip loglanir, akisi bozmaz). Mukerrer gonderim korumasi icin AYRI
-// bir Redis anahtarina gerek yok - zaten yukarida kargoBildirimKilidiAl()
-// ile siparis basina tek seferlik calisan blogun icinde gonderiliyor.
-const KULLANIM_TEMPLATE_NAME = "urun_kullanim_rehberi_v1";
+// olmak zorunda - serbest metin burada KULLANILAMAZ, Meta reddeder.
+// ILK CANLI TESTTE (2026-09-06) iki mesaj ARKA ARKAYA/UST USTE gitti, musteri
+// bunu istemedi. Bu yuzden kullanim rehberi artik HEMEN degil, QStash ile
+// 1 GUN (ertesi gun ayni saat) GECIKMELI olarak, ayri bir endpoint
+// (api/kullanim-rehberi.js) uzerinden gonderiliyor - bkz. asagidaki
+// scheduleKullanimRehberi(). Mukerrer gonderim korumasi icin AYRI bir Redis
+// anahtarina gerek yok - zaten yukarida kargoBildirimKilidiAl() ile siparis
+// basina tek seferlik calisan blogun icinde gorev olusturuluyor.
 
 // 2026-09-03 EKLENDI: Shopify'in "kargoya verildi" webhook'u ayni siparis
 // icin birden fazla kez tetiklenebiliyor (webhook tekrar denemesi, veya
@@ -93,39 +95,29 @@ async function logKargoToSheets(phone, name, orderNumber, product, status) {
   }
 }
 
-// Urun/kumanda kullanim rehberi sablonunu gonderir.
-async function sendKullanimRehberi(phone, firstName) {
+// Urun/kumanda kullanim rehberi sablonunu 1 gun (ertesi gun ayni saat)
+// GECIKMELI gonderilmesi icin QStash'e gorev birakir - fiili gonderim
+// api/kullanim-rehberi.js icinde yapilir (scheduleYorum ile ayni desen).
+async function scheduleKullanimRehberi(orderNumber, phone, firstName) {
   try {
-    const waResp = await fetch(
-      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: phone,
-          type: "template",
-          template: {
-            name: KULLANIM_TEMPLATE_NAME,
-            language: { code: TEMPLATE_LANG },
-            components: [
-              {
-                type: "body",
-                parameters: [{ type: "text", text: String(firstName) }]
-              }
-            ]
-          }
-        })
-      }
-    );
-    const waData = await waResp.json();
-    console.log("KULLANIM REHBERI WHATSAPP SONUCU:", JSON.stringify(waData));
-    console.log("KULLANIM REHBERI WA DURUM:", readWaStatus(waData));
+    if (!process.env.QSTASH_TOKEN) {
+      console.log("QSTASH_TOKEN yok, kullanim rehberi gorevi birakilamadi");
+      return;
+    }
+    const targetUrl = "https://masajur-ai-proxy.vercel.app/api/kullanim-rehberi?secret=" + SECRET;
+    const resp = await fetch("https://qstash.upstash.io/v2/publish/" + targetUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + process.env.QSTASH_TOKEN,
+        "Content-Type": "application/json",
+        "Upstash-Delay": "1d"
+      },
+      body: JSON.stringify({ orderNumber: orderNumber, phone: phone, firstName: firstName })
+    });
+    const data = await resp.json();
+    console.log("QSTASH KULLANIM REHBERI GOREVI:", JSON.stringify(data));
   } catch (e) {
-    console.error("KULLANIM REHBERI GONDERIM HATA:", e && e.message ? e.message : e);
+    console.error("QSTASH KULLANIM REHBERI GOREVI HATA:", e && e.message ? e.message : e);
   }
 }
 
@@ -268,11 +260,12 @@ module.exports = async (req, res) => {
     // Kargo bildirimini Sheets'e GERCEK gonderim durumuyla kaydet
     await logKargoToSheets(phone, firstName, orderNumber, productName, waStatus);
 
-    // Urun/kumanda kullanim rehberini AYRI sablonla gonder. Yukarida
+    // Urun/kumanda kullanim rehberini AYRI sablonla, 1 GUN GECIKMELI gonder
+    // (bkz. scheduleKullanimRehberi yorum blogu). Yukarida
     // kargoBildirimKilidiAl() zaten bu siparis icin bu blogun SADECE BIR
     // KERE calismasini garantiledigi icin burada ayrica bir mukerrer-onleme
     // kontrolu yapmaya gerek yok.
-    await sendKullanimRehberi(phone, firstName);
+    await scheduleKullanimRehberi(orderNumber, phone, firstName);
 
     // 3 gun sonra yorum kontrolu icin QStash'e gorev birak
     await scheduleYorum(orderNumber, phone, firstName);
