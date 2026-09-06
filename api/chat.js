@@ -21,9 +21,32 @@
 // elimdeki eski bir kopya uzerinden yapilan bir onceki duzeltme yanlislikla
 // bu korumayi kaldirmisti. Simdi diger tum dosyalarla (fatura-online.js,
 // webhook-process.js, teslim-kontrol.js vb.) AYNI desenle geri eklendi.
-// Bunu cagiran TEK yer olan webhook-process.js zaten ?secret=... ekleyerek
-// cagiriyor (bkz. o dosyadaki 2026-09-05 ucuncu duzeltme notu).
+// Bunu cagiran TEK sunucu-sunucu yeri olan webhook-process.js zaten
+// ?secret=... ekleyerek cagiriyor (bkz. o dosyadaki 2026-09-05 ucuncu
+// duzeltme notu).
+//
+// 2026-09-06 DUZELTME: bu dosyayi AYRICA web sitesindeki (masajur.com)
+// canli sohbet widget'i da dogrudan tarayicidan cagiriyormus. Widget'a
+// secret ekletmek guvenli DEGIL - tarayicida calisan JS herkesin
+// Gelistirici Araclari/Network sekmesinden gorebilecegi bir yer, yani
+// oraya gomulen "gizli" anahtar aslinda gizli olmaz. Bunun yerine: istek
+// ya DOGRU SECRET'I (sunucu-sunucu - WhatsApp botu) TASIYORSA, YA DA
+// kendi web sitemizden (Origin/Referer masajur.com) geldiyse kabul
+// ediliyor. Boylece WhatsApp tarafinda hicbir sey degismedi, web widget'i
+// da secret'a ihtiyac duymadan calisir, rastgele internetten gelen
+// (ne secret'i ne de bizim Origin'imizi tasiyan) istekler yine 401 alir.
 const SECRET = "masajur_yakkoholding_2128";
+const ALLOWED_WEBSITE_ORIGINS = [
+  "https://masajur.com",
+  "https://www.masajur.com"
+];
+
+function istekKendiSitemizdenMi(req) {
+  const kaynak = (req.headers && (req.headers.origin || req.headers.referer)) || "";
+  return ALLOWED_WEBSITE_ORIGINS.some(function (izinliOrigin) {
+    return kaynak.indexOf(izinliOrigin) === 0;
+  });
+}
 
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -37,8 +60,10 @@ module.exports = async (req, res) => {
   }
 
   const secret = req.query && req.query.secret;
-  if (secret !== SECRET) {
-    console.error("CHAT: gecersiz secret");
+  const secretGecerli = secret === SECRET;
+  const kendiSitemiz = istekKendiSitemizdenMi(req);
+  if (!secretGecerli && !kendiSitemiz) {
+    console.error("CHAT: gecersiz secret ve taninmayan kaynak:", (req.headers && (req.headers.origin || req.headers.referer)) || "(yok)");
     return res.status(401).send("Unauthorized");
   }
 
