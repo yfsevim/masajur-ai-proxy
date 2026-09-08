@@ -6,11 +6,12 @@
 //      cevap uretir ve Instagram DM olarak geri gonderir. TEK FARK: siparis/
 //      kargo sorularinda veri sorgulamiyor, WhatsApp'a yonlendiriyor (asagida
 //      SIPARIS_KARGO_KURALI).
-//   2) Gonderilerimize bir yorum geldiginde -> (a) yorumun ALTINA, sana ait
-//      3 hazir cumleden (PUBLIC_YORUM_CEVAPLARI) RASTGELE birini yazar,
-//      (b) yorumu yapan kisiye AYRICA ozel mesaj (DM) olarak, yorum metnini
-//      Claude'a gonderip satis odakli kisisel bir cevap uretir ve private
-//      reply olarak yollar.
+//   2) Gonderilerimize bir yorum geldiginde -> (a) yorumun ALTINA otomatik
+//      bir public cevap yazar - eger yorum fiyat/nasil alinir/siparis gibi
+//      bir sey soruyorsa FIYAT_SIPARIS grubu SIRAYLA (rotasyon), degilse
+//      GENEL grup RASTGELE secilir -, (b) yorumu yapan kisiye AYRICA ozel
+//      mesaj (DM) olarak, yorum metnini Claude'a gonderip satis odakli
+//      kisisel bir cevap uretir ve private reply olarak yollar.
 //
 // HAFIZA: webhook-process.js'deki (WhatsApp botu) ile AYNI yontemle -
 // Upstash Redis - konusma gecmisi tutuluyor. WhatsApp tarafiyla
@@ -44,6 +45,13 @@
 // calisiyor - graph.facebook.com'a gonderilince "Invalid OAuth access
 // token - Cannot parse access token" hatasi aliniyordu. WhatsApp API
 // cagrilari (sendAlertTo) bundan ETKILENMEDI, onlar hala graph.facebook.com.
+//
+// 2026-09-08 EKLENDI: Yorumlarda fiyat/nasil alinir/siparis gibi sorular
+// icin AYRI bir hazir-cevap grubu (PUBLIC_YORUM_CEVAPLARI_FIYAT_SIPARIS)
+// eklendi. Bu grup RASTGELE degil, SIRAYLA (rotasyon) kullaniliyor - Redis'te
+// tutulan bir sayacla hangi yorumun kacinci sirada oldugu takip ediliyor.
+// Genel yorumlar (bu tur bir soru sormayanlar) eskisi gibi PUBLIC_YORUM_
+// CEVAPLARI grubundan RASTGELE cevaplanmaya devam ediyor.
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
 
@@ -192,10 +200,11 @@ async function sikayetKontroluYapVeBildirDM(igUserId, mesajMetni) {
 }
 // -----------------------------------------
 
-// Senin verdigin, yorumun ALTINA yazilacak 3 hazir cevap - her yoruma
-// bunlardan RASTGELE biri yaziliyor (Claude'a URETTIRMIYORUZ, cunku
-// herkesin gordugu bir yerde saglik/satis iddialarini kontrolsuz
-// birakmak istemiyoruz - bunlar senin onayladigin metinler).
+// Senin verdigin, yorumun ALTINA yazilacak GENEL 3 hazir cevap - bu tur bir
+// soru sormayan (fiyat/siparis sormayan) yorumlara bunlardan RASTGELE
+// biri yaziliyor (Claude'a URETTIRMIYORUZ, cunku herkesin gordugu bir
+// yerde saglik/satis iddialarini kontrolsuz birakmak istemiyoruz - bunlar
+// senin onayladigin metinler).
 const PUBLIC_YORUM_CEVAPLARI = [
 `Merhaba 🌿 Masajur'da seans sınırı yok — sabah 15, akşam 15 dakika.
 Masajur'u bir kez alıyor, evinizde sınırsız kullanıyorsunuz.
@@ -226,6 +235,76 @@ Bir fizyoterapi seansı ortalama 3.000 TL; Masajur'da seans sınırı yok. Elekt
 function rastgelePublicYanitSec() {
   const i = Math.floor(Math.random() * PUBLIC_YORUM_CEVAPLARI.length);
   return PUBLIC_YORUM_CEVAPLARI[i];
+}
+
+// Yorum fiyat/nasil alinir/siparis gibi bir sey soruyorsa kullanilacak,
+// SIRAYLA (rotasyon ile) donen ayri grup. rastgele DEGIL - Redis'teki
+// sayaca gore 1, sonra 2, sonra 3, sonra 4, tekrar 1... seklinde ilerler.
+const PUBLIC_YORUM_CEVAPLARI_FIYAT_SIPARIS = [
+`Merhaba 🌿 Masajur olarak ürünü aracı bir firmayla değil, kendi depomuzdan Yurtiçi Kargo ile gönderiyoruz — adresimiz açık:
+Orta Mahalle, Özbek Sokak No:5/B — Kartal / İstanbul
+14 gün deneme süresi ve kapıda ödeme mevcut. Her şey için doğrudan arayabilirsiniz:
+📞 0551 148 5344 — 0553 068 1619
+🌐 masajur.com (link profilimizde)
+Fiyat: 5.699 TL (2025 fiyatı, zamsız)
+Depomuza gelip ürünü elden de alabilirsiniz; gelmeden 1 saat önce aramanız yeterli.
+Masajur'da seans sınırı yok, beş terapiyi evde uygulamak çok kolay.`,
+`Merhaba 🌿 Masajur'un farkı şurada: beş ayrı terapi tek seansta, eş zamanlı olarak boyun bölgesine uygulanıyor.
+- Elektriksel kas uyarımı
+- Isı terapisi
+- Masaj terapisi
+- Traksiyon terapisi
+- Akupresür noktaları
+Boyun bölgesinde gevşemeyi, kan akışını ve sinir sıkışmasının çözülmesini destekler. Sabah 15, akşam 15 dakika.
+📞 0551 148 5344 — 0553 068 1619
+🌐 masajur.com (link profilimizde)
+Fiyat: 5.699 TL (2025 fiyatı, zamsız)
+Masajur'da seans sınırı yok, seansı evde tek başınıza yapıyorsunuz.`,
+`Merhaba 🌿 Masajur sabah ve akşam her gün evde pratik olarak kullanılıyor ve seans sınırı yok.
+Bir fizyoterapi seansı ortalama 3.000 TL; Masajur iki seansın maliyetinden daha düşük — farkı, süresiz ve evinizde kullanabiliyor olmanız.
+14 gün deneme süresi ve kapıda ödeme mevcut.
+📞 0551 148 5344 — 0553 068 1619
+🌐 masajur.com (link profilimizde)
+Fiyat: 5.699 TL (2025 fiyatı, zamsız)
+Masajur'da elektriksel kas uyarımı, ısı, masaj, traksiyon ve akupresür bir arada; hepsi aynı seansta eş zamanlı olarak boyun bölgesine uygulanıyor.`,
+`Merhaba, ürünümüzün güncel fiyatı 5.699 TL'dir.
+✅ Kapıda ödeme seçeneğimiz mevcuttur.
+🚚 Tüm siparişlerde ücretsiz kargo yapılmaktadır.
+🎁 Ayrıca her siparişe Ortopedik Visco Yastık hediye edilmektedir.
+Masajur, ilk kullanımda dahi rahatlama sağlayan, düzenli kullanımda ise boyun bölgesine uzun vadeli destek sunan bir fizik tedavi cihazıdır. Kullanıcılarımızın %98'i memnuniyet bildirmiştir.
+Ayrıca 14 gün iade garantisi ile ürünü tamamen risksiz şekilde deneyebilirsiniz.
+📍 Depomuz İstanbul Kartal'da, kliniğimiz ise İstanbul Maltepe'dedir. Dilerseniz bizi ziyaret ederek ürünü yerinde inceleyebilir ve satın alabilirsiniz.
+📞 Bize 12.00 - 20.00 saatleri arasında 0553 068 16 19 veya 0551 148 53 44 numaralarından ulaşabilirsiniz. Çalışma saatleri dışında ise WhatsApp üzerinden mesaj bırakabilirsiniz.
+🛒 Detaylı bilgi almak veya sipariş vermek için profilimizdeki bağlantıya tıklayabilirsiniz. www.masajur.com`
+];
+
+// Yorumun fiyat/nasil alinir/siparis gibi bir sey sorup sormadigini kontrol eder.
+const FIYAT_SIPARIS_ANAHTAR_KELIMELER = [
+  "fiyat", "kaç para", "kac para", "ne kadar", "kaça", "kaca",
+  "nasıl alırım", "nasil alirim", "nasıl alabilirim", "nasil alabilirim",
+  "nasıl sipariş", "nasil siparis", "sipariş vermek istiyorum", "siparis vermek istiyorum",
+  "sipariş verebilir miyim", "siparis verebilir miyim", "nasıl satın alırım", "nasil satin alirim",
+  "satın almak istiyorum", "satin almak istiyorum", "nereden alabilirim", "nereden alirim",
+  "almak istiyorum", "sipariş vermek", "siparis vermek"
+];
+
+function yorumFiyatSiparisSoruyorMu(mesaj) {
+  const lower = String(mesaj).toLowerCase();
+  return FIYAT_SIPARIS_ANAHTAR_KELIMELER.some(function (k) { return lower.includes(k); });
+}
+
+// Redis'teki sayaci arttirip PUBLIC_YORUM_CEVAPLARI_FIYAT_SIPARIS icinde
+// SIRADAKI metni dondurur (1, 2, 3, 4, tekrar 1, 2, 3, 4...).
+async function siradakiFiyatSiparisYanitiniGetir() {
+  try {
+    const sayac = await redis.incr("ig-fiyat-siparis-yorum-sayac");
+    const index = (sayac - 1) % PUBLIC_YORUM_CEVAPLARI_FIYAT_SIPARIS.length;
+    return PUBLIC_YORUM_CEVAPLARI_FIYAT_SIPARIS[index];
+  } catch (e) {
+    console.error("IG FIYAT/SIPARIS SIRA SAYAC HATA, rastgeleye dusuluyor:", e && e.message ? e.message : e);
+    const i = Math.floor(Math.random() * PUBLIC_YORUM_CEVAPLARI_FIYAT_SIPARIS.length);
+    return PUBLIC_YORUM_CEVAPLARI_FIYAT_SIPARIS[i];
+  }
 }
 
 const SATIS_PROMPT = `
@@ -544,8 +623,13 @@ module.exports = async (req, res) => {
             continue;
           }
 
-          // 1) Yorumun ALTINA, senin verdigin 3 hazir cevaptan rastgele biri
-          await yorumaPublicYanitVer(yorumId, rastgelePublicYanitSec());
+          // 1) Yorumun ALTINA public cevap: fiyat/nasil alinir/siparis gibi
+          // bir sey soruyorsa SIRAYLA (rotasyon) o gruptan, degilse eskisi
+          // gibi genel gruptan RASTGELE.
+          const publicYanitMetni = yorumFiyatSiparisSoruyorMu(yorumMetni)
+            ? await siradakiFiyatSiparisYanitiniGetir()
+            : rastgelePublicYanitSec();
+          await yorumaPublicYanitVer(yorumId, publicYanitMetni);
 
           // 2) Yorumu yapan kisiye OZEL mesaj (DM) - Claude'dan satis odakli,
           // kisisel cevap. Bu, o kisinin normal DM hafizasina da ekleniyor;
