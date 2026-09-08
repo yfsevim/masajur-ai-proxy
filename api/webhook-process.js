@@ -39,6 +39,17 @@
 // hata firlatiyor, boylece asagidaki catch bloku devreye girip dogru
 // "yogunluk" mesajini gonderiyor. Ayrica bkz. api/chat.js'teki es zamanli
 // duzeltme (Anthropic cevabini kontrol etme).
+//
+// 2026-09-08 DUZELTME (musteri cevabini ETKILEMEYEN, sadece kayit
+// tarafinda gorulen "SHEETS LOG HATA: This operation was aborted" hatasi):
+// logToSheets() musteriye WhatsApp cevabi zaten gonderildikten SONRA
+// calisiyor, dolayisiyla bu hata musteri deneyimini hicbir zaman etkilemedi
+// - sadece o mesajin Sheets'e (dashboard/log) dusmemesine yol aciyordu.
+// Muhtemel sebep: Google Apps Script tarafinin ara sira gecici yavasligi/
+// soguk baslangici, 8sn'lik zaman asimini asiyordu. Artik basarisiz olursa
+// kisa bir bekleme sonrasi otomatik olarak toplam 3 kez denenir; ucu de
+// basarisiz olursa yine akisi bozmadan (musteri etkilenmeden) sadece
+// hatayi loglar.
 
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
@@ -182,21 +193,47 @@ async function jsonFetch(url, body, ms) {
   return await resp.json();
 }
 
-// Sohbeti Google Sheets'e yaz (hata olsa bile akisi bozma)
+function bekle(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Sohbeti Google Sheets'e yaz (hata olsa bile akisi bozma).
+// 2026-09-08: Bu fonksiyon musteriye WhatsApp cevabi ZATEN gonderildikten
+// sonra calisiyor - dolayisiyla basarisiz olsa bile musteri hicbir zaman
+// etkilenmez, sadece o mesaj Sheets'teki log/dashboard'a dusmez. Ara sira
+// gorulen "This operation was aborted" (zaman asimi) icin artik kisa bir
+// bekleme ile toplam 3 kez deneniyor; hepsi basarisiz olursa sadece
+// hatayi loglayip vazgeciyor.
+const SHEETS_LOG_DENEME_SAYISI = 3;
+const SHEETS_LOG_DENEME_ARASI_MS = 1000;
+
 async function logToSheets(phone, message, reply) {
-  try {
-    if (!process.env.SHEETS_URL) return;
-    await fetchWithTimeout(
-      process.env.SHEETS_URL,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phone, message: message, reply: reply })
-      },
-      8000
-    );
-  } catch (e) {
-    console.error("SHEETS LOG HATA:", e && e.message ? e.message : e);
+  if (!process.env.SHEETS_URL) return;
+
+  for (let deneme = 1; deneme <= SHEETS_LOG_DENEME_SAYISI; deneme++) {
+    try {
+      await fetchWithTimeout(
+        process.env.SHEETS_URL,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: phone, message: message, reply: reply })
+        },
+        8000
+      );
+      if (deneme > 1) {
+        console.log("SHEETS LOG: " + deneme + ". denemede basarili oldu.");
+      }
+      return; // basarili, fonksiyondan cik
+    } catch (e) {
+      const hataMetni = e && e.message ? e.message : e;
+      if (deneme < SHEETS_LOG_DENEME_SAYISI) {
+        console.error("SHEETS LOG HATA (deneme " + deneme + "/" + SHEETS_LOG_DENEME_SAYISI + "), tekrar denenecek:", hataMetni);
+        await bekle(SHEETS_LOG_DENEME_ARASI_MS);
+      } else {
+        console.error("SHEETS LOG HATA (son deneme " + deneme + "/" + SHEETS_LOG_DENEME_SAYISI + "), vazgeciliyor:", hataMetni);
+      }
+    }
   }
 }
 
