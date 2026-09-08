@@ -6,12 +6,16 @@
 //      cevap uretir ve Instagram DM olarak geri gonderir. TEK FARK: siparis/
 //      kargo sorularinda veri sorgulamiyor, WhatsApp'a yonlendiriyor (asagida
 //      SIPARIS_KARGO_KURALI).
-//   2) Gonderilerimize bir yorum geldiginde -> (a) yorumun ALTINA otomatik
-//      bir public cevap yazar - eger yorum fiyat/nasil alinir/siparis gibi
-//      bir sey soruyorsa FIYAT_SIPARIS grubu SIRAYLA (rotasyon), degilse
-//      GENEL grup RASTGELE secilir -, (b) yorumu yapan kisiye AYRICA ozel
-//      mesaj (DM) olarak, yorum metnini Claude'a gonderip satis odakli
-//      kisisel bir cevap uretir ve private reply olarak yollar.
+//   2) Gonderilerimize bir yorum geldiginde -> ONCE yorumun OLUMSUZ/KOTU/
+//      SIKAYET olup olmadigina Claude ile bakilir:
+//        - OLUMSUZSA: musteriye HICBIR CEVAP gitmez (ne public ne DM),
+//          SADECE staff'a (sana) WhatsApp'tan bilgilendirme gider.
+//        - OLUMLU/NOTR ise: (a) yorumun ALTINA otomatik bir public cevap
+//          yazilir (fiyat/nasil alinir/siparis soruyorsa FIYAT_SIPARIS
+//          grubu SIRAYLA/rotasyon, degilse GENEL grup RASTGELE), (b) yorumu
+//          yapan kisiye AYRICA ozel mesaj (DM) olarak, yorum metnini
+//          Claude'a gonderip satis odakli kisisel bir cevap uretilir ve
+//          private reply olarak yollanir.
 //
 // HAFIZA: webhook-process.js'deki (WhatsApp botu) ile AYNI yontemle -
 // Upstash Redis - konusma gecmisi tutuluyor. WhatsApp tarafiyla
@@ -22,12 +26,14 @@
 // (Redis nx kilidi) hem DM mesajlari hem yorumlar icin ayri ayri eklendi -
 // Meta ayni olayi iki kere gonderse bile bot iki kere cevap yazmaz.
 //
-// SIKAYET BILDIRIMI: webhook-process.js'deki ALERT_KEYWORDS / sendAlertTo
-// mantigi BIREBIR ayni sekilde buraya da eklendi - Instagram'da (DM veya
-// yorumda) riskli bir kelime gecerse, WhatsApp'taki gibi sana ve ortagina
-// 'temsilci_bildirim' sablonuyla WhatsApp bildirimi gidiyor. DM'ler icin
-// bildirimde @kullaniciadi de gosteriliyor (WhatsApp'taki telefon numarasi
-// karsiligi) - boylece o musteriyi Instagram'da arayip bulabilirsin.
+// SIKAYET BILDIRIMI (DM tarafi): webhook-process.js'deki ALERT_KEYWORDS /
+// sendAlertTo mantigi BIREBIR ayni sekilde buraya da eklendi - Instagram
+// DM'inde riskli bir kelime gecerse, WhatsApp'taki gibi sana ve ortagina
+// 'temsilci_bildirim' sablonuyla WhatsApp bildirimi gidiyor. Bildirimde
+// @kullaniciadi de gosteriliyor (WhatsApp'taki telefon numarasi karsiligi)
+// - boylece o musteriyi Instagram'da arayip bulabilirsin. NOT: bu kelime-
+// listesi tabanli tespit SADECE DM'ler icin gecerli; yorumlar icin asagida
+// AYRI ve daha genis bir Claude tabanli olumsuzluk tespiti kullaniliyor.
 //
 // Meta, bu tur webhook URL'lerini iki farkli sekilde cagirir:
 //   - GET: sadece bir kere, webhook'u KAYDEDERKEN doner (hub.mode=subscribe,
@@ -50,8 +56,16 @@
 // icin AYRI bir hazir-cevap grubu (PUBLIC_YORUM_CEVAPLARI_FIYAT_SIPARIS)
 // eklendi. Bu grup RASTGELE degil, SIRAYLA (rotasyon) kullaniliyor - Redis'te
 // tutulan bir sayacla hangi yorumun kacinci sirada oldugu takip ediliyor.
-// Genel yorumlar (bu tur bir soru sormayanlar) eskisi gibi PUBLIC_YORUM_
-// CEVAPLARI grubundan RASTGELE cevaplanmaya devam ediyor.
+//
+// 2026-09-08 EKLENDI (2): Her yorum artik ONCE Claude ile olumlu/olumsuz
+// diye siniflandiriliyor (yorumOlumsuzMu). Olumsuz/kotu/sikayet ciken
+// yorumlara ARTIK NE PUBLIC CEVAP NE DE DM GONDERILMIYOR - sadece staff'a
+// (sana) WhatsApp'tan bilgilendirme gidiyor (bildirOlumsuzYorum), boylece
+// sen o musteriyle ilgilenebilirsin. Bu tespit sabit bir kelime listesiyle
+// SINIRLI DEGIL (ALERT_KEYWORDS'ten daha genis) - Claude her yorumu kendi
+// baglamiyla degerlendiriyor. Siniflandirma API'si hata verirse guvenli
+// tarafta kalinip yorum OLUMLU sayilir (musteriye cevap gitmeye devam eder)
+// - boylece gecici bir teknik sorun musteri cevaplarini tumden durdurmaz.
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
 
@@ -98,6 +112,8 @@ async function acquireLock(key) {
 // -----------------------------------------
 
 // --- Sikayet/risk bildirimi (webhook-process.js ile AYNI liste ve numaralar) ---
+// NOT: bu kelime-listesi tabanli tespit SADECE DM icin kullaniliyor.
+// Yorumlar icin asagidaki yorumOlumsuzMu() (Claude tabanli) kullaniliyor.
 const ALERT_KEYWORDS = [
   "şikayet", "sikayet", "şikayetçi", "sikayetci", "şikayetçiyim", "sikayetciyim",
   "memnun değil", "memnun degil", "memnun kalmadım", "memnun kalmadim",
@@ -164,9 +180,21 @@ async function sendAlertTo(toNumber, kaynakEtiketi, mesajMetni) {
   }
 }
 
+// DM'ler icin: kelime-listesi tabanli tespit (needsAlert), gerekirse HER
+// iki staff numarasina da bildirim gonderir.
 async function sikayetKontroluYapVeBildir(kaynakEtiketi, mesajMetni) {
   if (!needsAlert(mesajMetni)) return;
   console.log("IG WEBHOOK: SIKAYET/RISK ALERT TETIKLENDI -", kaynakEtiketi);
+  for (const num of ALERT_NUMBERS) {
+    await sendAlertTo(num, kaynakEtiketi, mesajMetni);
+  }
+}
+
+// Yorumlar icin: KOSULSUZ bildirim (yorumOlumsuzMu zaten olumsuz dedi,
+// burada tekrar kelime kontrolu yapilmiyor) - HER iki staff numarasina da
+// gonderilir.
+async function bildirOlumsuzYorum(kaynakEtiketi, mesajMetni) {
+  console.log("IG WEBHOOK: OLUMSUZ YORUM BILDIRIMI GONDERILIYOR -", kaynakEtiketi);
   for (const num of ALERT_NUMBERS) {
     await sendAlertTo(num, kaynakEtiketi, mesajMetni);
   }
@@ -198,12 +226,48 @@ async function sikayetKontroluYapVeBildirDM(igUserId, mesajMetni) {
   const etiket = "Instagram DM: " + (kullaniciAdi ? "@" + kullaniciAdi : igUserId);
   await sikayetKontroluYapVeBildir(etiket, mesajMetni);
 }
+
+// Yorumun OLUMSUZ/KOTU/SIKAYET olup olmadigini Claude'a soruyor. Sabit bir
+// kelime listesiyle SINIRLI DEGIL - "beğenmedim", "para tuzağı", "berbat"
+// gibi ALERT_KEYWORDS'te olmayan olumsuz ifadeleri de yakalamasi icin.
+// Hata olursa (API sorunu vb.) GUVENLI TARAFTA kalinir: false (olumlu)
+// donulur, boylece teknik bir aksaklik musteri cevaplarini durdurmaz.
+async function yorumOlumsuzMu(yorumMetni) {
+  if (!yorumMetni || !String(yorumMetni).trim()) return false;
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 10,
+        system: "Sana Masajur markasinin Instagram gonderisine yazilmis bir yorum verilecek. Bu yorumun OLUMSUZ mu yoksa OLUMLU/NOTR mu oldugunu belirle. OLUMSUZ: sikayet, kotu deneyim, urunden/hizmetten memnuniyetsizlik, kufur/hakaret, dolandiricilik suclamasi, alaycı/kotuleyici yorum, urunun bozuk/arizali/ise yaramadigini soyleme. OLUMLU/NOTR: bilgi sorma, fiyat sorma, nasil siparis verilir sorma, ilgi/begeni gosterme, tarafsiz soru, olumlu yorum. SADECE tek kelime cevap ver, baska hicbir sey yazma: OLUMSUZ veya OLUMLU.",
+        messages: [{ role: "user", content: String(yorumMetni) }]
+      })
+    });
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => "");
+      console.error("IG WEBHOOK: yorum siniflandirma API hatasi:", response.status, errBody.slice(0, 300));
+      return false;
+    }
+    const data = await response.json();
+    const cevap = (data.content?.[0]?.text || "").trim().toUpperCase();
+    return cevap.indexOf("OLUMSUZ") !== -1;
+  } catch (e) {
+    console.error("IG WEBHOOK: yorum siniflandirma istisnasi:", e && e.message ? e.message : e);
+    return false;
+  }
+}
 // -----------------------------------------
 
 // Senin verdigin, yorumun ALTINA yazilacak GENEL 3 hazir cevap - bu tur bir
-// soru sormayan (fiyat/siparis sormayan) yorumlara bunlardan RASTGELE
-// biri yaziliyor (Claude'a URETTIRMIYORUZ, cunku herkesin gordugu bir
-// yerde saglik/satis iddialarini kontrolsuz birakmak istemiyoruz - bunlar
+// soru sormayan (fiyat/siparis sormayan) OLUMLU/NOTR yorumlara bunlardan
+// RASTGELE biri yaziliyor (Claude'a URETTIRMIYORUZ, cunku herkesin gordugu
+// bir yerde saglik/satis iddialarini kontrolsuz birakmak istemiyoruz - bunlar
 // senin onayladigin metinler).
 const PUBLIC_YORUM_CEVAPLARI = [
 `Merhaba 🌿 Masajur'da seans sınırı yok — sabah 15, akşam 15 dakika.
@@ -623,9 +687,22 @@ module.exports = async (req, res) => {
             continue;
           }
 
+          const yorumKullaniciAdi = yorum.from && yorum.from.username ? yorum.from.username : null;
+          const yorumEtiketi = "Instagram yorum: @" + (yorumKullaniciAdi || yorumYapanId);
+
+          // ONCE: yorum olumsuz/kotu/sikayet mi? Oyleyse musteriye HICBIR
+          // CEVAP gitmez (ne public ne DM), sadece staff'a bildirim gider.
+          const olumsuzMu = await yorumOlumsuzMu(yorumMetni);
+          if (olumsuzMu) {
+            console.log("IG WEBHOOK: OLUMSUZ/KOTU YORUM TESPIT EDILDI, cevap gonderilmiyor -", yorumEtiketi);
+            await bildirOlumsuzYorum(yorumEtiketi, yorumMetni);
+            continue;
+          }
+
+          // OLUMLU/NOTR ise eskisi gibi devam:
           // 1) Yorumun ALTINA public cevap: fiyat/nasil alinir/siparis gibi
-          // bir sey soruyorsa SIRAYLA (rotasyon) o gruptan, degilse eskisi
-          // gibi genel gruptan RASTGELE.
+          // bir sey soruyorsa SIRAYLA (rotasyon) o gruptan, degilse genel
+          // gruptan RASTGELE.
           const publicYanitMetni = yorumFiyatSiparisSoruyorMu(yorumMetni)
             ? await siradakiFiyatSiparisYanitiniGetir()
             : rastgelePublicYanitSec();
@@ -641,9 +718,6 @@ module.exports = async (req, res) => {
           if (dmCevap) {
             await instagramMesajGonder({ comment_id: yorumId }, dmCevap);
           }
-
-          const yorumEtiketi = "Instagram yorum: @" + (yorum.from && yorum.from.username ? yorum.from.username : yorumYapanId);
-          await sikayetKontroluYapVeBildir(yorumEtiketi, yorumMetni);
         } catch (e) {
           console.error("IG WEBHOOK: yorum isleme hatasi:", e && e.message ? e.message : e);
         }
