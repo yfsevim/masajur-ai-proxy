@@ -36,6 +36,14 @@
 // Guvenlik: diger tum dosyalarla (chat.js, kullanim-rehberi.js vb.) AYNI
 // desen - URL'nin sonuna ?secret=... eklenmis olmasi sart, YOKSA istegi
 // reddediyoruz.
+//
+// 2026-09-08 DUZELTME: Instagram mesaj/yorum API cagrilari artik
+// graph.facebook.com YERINE graph.instagram.com adresine gidiyor. Bu token
+// (Instagram business login / "API setup with Instagram login" akisindan
+// uretilen IGAA... ile baslayan token) SADECE graph.instagram.com uzerinde
+// calisiyor - graph.facebook.com'a gonderilince "Invalid OAuth access
+// token - Cannot parse access token" hatasi aliniyordu. WhatsApp API
+// cagrilari (sendAlertTo) bundan ETKILENMEDI, onlar hala graph.facebook.com.
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
 
@@ -164,7 +172,7 @@ async function sikayetKontroluYapVeBildir(kaynakEtiketi, mesajMetni) {
 async function igKullaniciAdiGetir(igUserId) {
   try {
     const resp = await fetch(
-      `https://graph.facebook.com/v23.0/${igUserId}?fields=username&access_token=${process.env.INSTAGRAM_ACCESS_TOKEN}`
+      `https://graph.instagram.com/v23.0/${igUserId}?fields=username&access_token=${process.env.INSTAGRAM_ACCESS_TOKEN}`
     );
     const data = await resp.json();
     return data && data.username ? data.username : null;
@@ -416,7 +424,7 @@ async function kullaniciyaCevapUret(igUserId, kullaniciMesaji) {
 
 async function instagramMesajGonder(recipient, text) {
   try {
-    const resp = await fetch(`https://graph.facebook.com/v23.0/${IG_ACCOUNT_ID}/messages`, {
+    const resp = await fetch(`https://graph.instagram.com/v23.0/${IG_ACCOUNT_ID}/messages`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.INSTAGRAM_ACCESS_TOKEN}`,
@@ -437,7 +445,7 @@ async function instagramMesajGonder(recipient, text) {
 
 async function yorumaPublicYanitVer(commentId, text) {
   try {
-    const resp = await fetch(`https://graph.facebook.com/v23.0/${commentId}/replies`, {
+    const resp = await fetch(`https://graph.instagram.com/v23.0/${commentId}/replies`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.INSTAGRAM_ACCESS_TOKEN}`,
