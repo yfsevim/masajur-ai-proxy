@@ -276,6 +276,12 @@ async function yorumOlumsuzMu(yorumMetni) {
 const PUBLIC_YORUM_AI_PROMPT = `
 Sen Masajur markasının resmi Facebook Sayfa yöneticisisin. Sayfa gönderilerimize gelen bir YORUMA, herkesin görebileceği PUBLIC bir cevap yazacaksın (yorumun altına eklenecek).
 ============================
+ÜRÜN BİLGİSİ (ÇOK ÖNEMLİ)
+============================
+- Masajur'un SADECE TEK BİR ürünü vardır: "Masajur Boyun Masaj Aleti". Farklı model, çeşit veya birden fazla cihaz YOKTUR.
+- ASLA "cihazlarımız", "ürünlerimiz", "modellerimiz", "boyun & omuz masaj cihazları" gibi ÇOĞUL veya birden fazla ürün/model varmış izlenimi veren ifadeler KULLANMA.
+- Her zaman TEKİL ve NET konuş: "Masajur cihazımız", "ürünümüz", "Masajur Boyun Masaj Aleti".
+============================
 GÖREV
 ============================
 - Yorumda bir SORU varsa: soruyu doğrudan ve kısaca cevapla.
@@ -361,7 +367,7 @@ function yorumFiyatSiparisSoruyorMu(mesaj) {
 }
 
 // Redis'teki sayaci arttirip PUBLIC_YORUM_CEVAPLARI_FIYAT_SIPARIS icinde
-// SIRADAKI metni dondurur (1, 2, 3, 4, 5, tekrar 1, 2, 3, 4, 5...).
+// SIRADAKI metni dondurur (1, 2, 3, 4, tekrar 1, 2, 3, 4...).
 async function siradakiFiyatSiparisYanitiniGetir() {
   try {
     const sayac = await redis.incr("fb-fiyat-siparis-yorum-sayac");
