@@ -12,10 +12,11 @@
 //          SADECE staff'a (sana) WhatsApp'tan bilgilendirme gider.
 //        - OLUMLU/NOTR ise: (a) yorumun ALTINA otomatik bir public cevap
 //          yazilir (fiyat/nasil alinir/siparis soruyorsa FIYAT_SIPARIS
-//          grubu SIRAYLA/rotasyon, degilse GENEL grup RASTGELE), (b) yorumu
-//          yapan kisiye AYRICA ozel mesaj (DM) olarak, yorum metnini
-//          Claude'a gonderip satis odakli kisisel bir cevap uretilir ve
-//          private reply olarak yollanir.
+//          grubu SIRAYLA/rotasyon, degilse Claude'a o yoruma OZEL bir cevap
+//          urettirilir - bkz. PUBLIC_YORUM_AI_PROMPT), (b) yorumu yapan
+//          kisiye AYRICA ozel mesaj (DM) olarak, yorum metnini Claude'a
+//          gonderip satis odakli kisisel bir cevap uretilir ve private
+//          reply olarak yollanir.
 //
 // HAFIZA: webhook-process.js'deki (WhatsApp botu) ile AYNI yontemle -
 // Upstash Redis - konusma gecmisi tutuluyor. WhatsApp tarafiyla
@@ -264,82 +265,90 @@ async function yorumOlumsuzMu(yorumMetni) {
 }
 // -----------------------------------------
 
-// Senin verdigin, yorumun ALTINA yazilacak GENEL 3 hazir cevap - bu tur bir
-// soru sormayan (fiyat/siparis sormayan) OLUMLU/NOTR yorumlara bunlardan
-// RASTGELE biri yaziliyor (Claude'a URETTIRMIYORUZ, cunku herkesin gordugu
-// bir yerde saglik/satis iddialarini kontrolsuz birakmak istemiyoruz - bunlar
-// senin onayladigin metinler).
-const PUBLIC_YORUM_CEVAPLARI = [
-`Merhaba 🌿 Masajur'da seans sınırı yok — sabah 15, akşam 15 dakika.
-Masajur'u bir kez alıyor, evinizde sınırsız kullanıyorsunuz.
-15 dakikada beş terapi eş zamanlı çalışıyor: elektriksel kas uyarımı, ısı, masaj, traksiyon ve akupresür. Boyun bölgesinde gevşemeyi, kan akışını ve sinir sıkışmasının çözülmesini destekler.
-✔️ 14 gün evinizde deneme
-✔️ Kapıda ödeme
-✔️ Yurtiçi Kargo ile ücretsiz teslimat
-📞 0551 148 5344 — 0553 068 1619
-🌐 masajur.com (link profilimizde)
-Tek Fiyat: 5.699 TL (2025 fiyatı, zam yok)
-Kartal'daki depomuzdan elden de alabilirsiniz; gelmeden 1 saat önce aramanız yeterli.`,
-`Merhaba 🙏 En çok merak edileni baştan söyleyelim: Masajur'u 14 gün evinizde deneyebiliyorsunuz.
-Beklediğiniz rahatlamayı vermezse iade edebilirsiniz. Ödeme kapıda, peşin göndermenize gerek yok.
-📞 0551 148 5344 — 0553 068 1619
-🌐 masajur.com (link profilimizde)
-Fiyat: 5.699 TL (2025 fiyatı, zamsız)
-Masajur'da seans sınırsız — sabah ve akşam, evinizde.`,
-`Merhaba 🌿 Masajur; uzun süredir devam eden boyun ağrıları için geliştirildi — sabah 15, akşam 15 dakika yeterli.
-- 14 gün deneme süresi
-- Kapıda ödeme
-- Kartal'daki kendi depomuzdan ücretsiz gönderim
-📞 0551 148 5344 — 0553 068 1619
-🌐 masajur.com (link profilimizde)
-Fiyat: 5.699 TL (2025 fiyatı, zamsız)
-Bir fizyoterapi seansı ortalama 3.000 TL; Masajur'da seans sınırı yok. Elektriksel kas uyarımı, ısı, masaj, traksiyon ve akupresür 15 dakikada eş zamanlı olarak boyun bölgenize uygulanıyor.`
-];
+// 2026-09-14 DEGISTIRILDI: Fiyat/siparis SORMAYAN (ama olumsuz da olmayan)
+// yorumlara artik SABIT/RASTGELE bir metin YAZILMIYOR. Bunun yerine yorumun
+// ALTINA Claude'a URETTIRILEN, o yoruma OZEL bir public cevap yaziliyor:
+// - Yorumda bir SORU varsa dogrudan cevaplanir.
+// - "Buna/suna iyi gelir mi" tarzi saglik/fayda sorularinda GUCLU ve
+//   IDDIALI (satis dilini oldurmeyen) bir dille cevap verilir - asagidaki
+//   PUBLIC_YORUM_AI_PROMPT, SATIS_PROMPT'taki "SAGLIK IFADELERI" bolumuyle
+//   AYNI tonu (ciddi derecede fayda saglar vb.) kullanir.
+// - Yorum bir soru degilse (sadece begeni/tesekkur) sicak bir karsilik
+//   verilir.
+// - Musteriyi ASLA korkutmaz, satistan uzaklastirmaz; pazarlamaya yonlendirir.
+// API hata verirse (once denenip basarisiz olursa) asagidaki sabit
+// PUBLIC_YORUM_AI_FALLBACK metni kullanilir - boylece bir yoruma HICBIR
+// public cevap yazilmadan kalinmaz.
+const PUBLIC_YORUM_AI_PROMPT = `
+Sen Masajur markasının resmi Instagram hesabı yöneticisisin. Gönderilerimize gelen bir YORUMA, herkesin görebileceği PUBLIC bir cevap yazacaksın (yorumun altına eklenecek).
+============================
+GÖREV
+============================
+- Yorumda bir SORU varsa: soruyu doğrudan ve kısaca cevapla.
+- "Buna/şuna iyi gelir mi", "geçirir mi", "işe yarar mı", "fayda sağlar mı" gibi sağlık/fayda soruları için GÜÇLÜ, İDDİALI ve GÜVEN VEREN bir dille cevap ver: ürünün ciddi derecede fayda sağladığını, düzenli kullanımda belirgin etki gösterdiğini net bir şekilde belirt. "Kesin bir şey söyleyemem", "kişiden kişiye değişir", "emin değilim", "doktorunuza danışın", "garanti edemeyiz" gibi çekingen, korkutucu veya satışı öldüren ifadeleri KESİNLİKLE KULLANMA.
+- Yorum bir soru değilse (sadece beğeni/teşekkür/övgü/emoji vb.) sıcak ve samimi bir teşekkür/karşılık ver.
+- Müşteriyi ASLA korkutma, ürünü kötüleme veya satıştan uzaklaştırma; her fırsatta nazikçe ilgiyi ürüne ve markaya yönelt, pazarlamaya hizmet et.
+============================
+UZUNLUK VE ÜSLUP
+============================
+- PUBLIC bir yorum cevabı yazıyorsun; KISA tut (1-3 cümle, en fazla 2-3 satır).
+- Markdown, yıldız, madde işareti KULLANMA. Düz metin yaz.
+- "Siz" diliyle, sıcak ve profesyonel bir tonla yaz.
+- İstersen sona "Detaylı bilgi için mesaj kutunuzu kontrol edebilirsiniz 📩" gibi DM'e yönlendiren kısa bir cümle ekleyebilirsin, zorunlu değil.
+- Doğal yerlerde emoji kullanabilirsin, abartma.
+============================
+YASAKLAR
+============================
+- Fiyat, adres, garanti gibi kritik bilgiyi UYDURMA; müşteri özellikle sormadıkça bu detaylara girme.
+- "Doktor", "doktorunuza danışın", "fizik tedavi ile birlikte" gibi ifadeler KULLANMA.
+- Yapay zeka/bot olduğunu ASLA söyleme veya ima etme; gerçek bir Masajur ekip üyesi gibi yaz.
+- "Fıtığınızı tamamen geçirir/iyileştirir/tedavi eder" gibi TIBBİ KESİNLİK vaadi verme; bunun yerine "ciddi fayda sağlar, belirgin etki gösterir, rahatlatır" gibi ifadeler kullan.
+`;
 
-function rastgelePublicYanitSec() {
-  const i = Math.floor(Math.random() * PUBLIC_YORUM_CEVAPLARI.length);
-  return PUBLIC_YORUM_CEVAPLARI[i];
+const PUBLIC_YORUM_AI_FALLBACK = "Merhaba 😊 Yorumunuz için teşekkür ederiz! Sorularınız için mesaj kutunuzu kontrol edebilirsiniz 📩";
+
+// Yorum metnini Claude'a gonderip o yoruma OZEL, kisa bir public cevap
+// urettirir. Hata olursa (API sorunu vb.) null doner - cagiran yerde
+// PUBLIC_YORUM_AI_FALLBACK'e dusulur, boylece yoruma HICBIR cevap
+// yazilmadan kalinmaz.
+async function yorumaPublicAICevapUret(yorumMetni) {
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 200,
+        system: PUBLIC_YORUM_AI_PROMPT,
+        messages: [{ role: "user", content: String(yorumMetni || "Güzel görünüyor.") }]
+      })
+    });
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => "");
+      console.error("IG WEBHOOK: public yorum AI cevap hatasi:", response.status, errBody.slice(0, 300));
+      return null;
+    }
+    const data = await response.json();
+    return data.content?.[0]?.text || null;
+  } catch (e) {
+    console.error("IG WEBHOOK: public yorum AI cevap istisnasi:", e && e.message ? e.message : e);
+    return null;
+  }
 }
 
 // Yorum fiyat/nasil alinir/siparis gibi bir sey soruyorsa kullanilacak,
 // SIRAYLA (rotasyon ile) donen ayri grup. rastgele DEGIL - Redis'teki
 // sayaca gore 1, sonra 2, sonra 3, sonra 4, tekrar 1... seklinde ilerler.
 const PUBLIC_YORUM_CEVAPLARI_FIYAT_SIPARIS = [
-`Merhaba 🌿 Masajur olarak ürünü aracı bir firmayla değil, kendi depomuzdan Yurtiçi Kargo ile gönderiyoruz — adresimiz açık:
-Orta Mahalle, Özbek Sokak No:5/B — Kartal / İstanbul
-14 gün deneme süresi ve kapıda ödeme mevcut. Her şey için doğrudan arayabilirsiniz:
-📞 0551 148 5344 — 0553 068 1619
-🌐 masajur.com (link profilimizde)
-Fiyat: 5.699 TL (2025 fiyatı, zamsız)
-Depomuza gelip ürünü elden de alabilirsiniz; gelmeden 1 saat önce aramanız yeterli.
-Masajur'da seans sınırı yok, beş terapiyi evde uygulamak çok kolay.`,
-`Merhaba 🌿 Masajur'un farkı şurada: beş ayrı terapi tek seansta, eş zamanlı olarak boyun bölgesine uygulanıyor.
-- Elektriksel kas uyarımı
-- Isı terapisi
-- Masaj terapisi
-- Traksiyon terapisi
-- Akupresür noktaları
-Boyun bölgesinde gevşemeyi, kan akışını ve sinir sıkışmasının çözülmesini destekler. Sabah 15, akşam 15 dakika.
-📞 0551 148 5344 — 0553 068 1619
-🌐 masajur.com (link profilimizde)
-Fiyat: 5.699 TL (2025 fiyatı, zamsız)
-Masajur'da seans sınırı yok, seansı evde tek başınıza yapıyorsunuz.`,
-`Merhaba 🌿 Masajur sabah ve akşam her gün evde pratik olarak kullanılıyor ve seans sınırı yok.
-Bir fizyoterapi seansı ortalama 3.000 TL; Masajur iki seansın maliyetinden daha düşük — farkı, süresiz ve evinizde kullanabiliyor olmanız.
-14 gün deneme süresi ve kapıda ödeme mevcut.
-📞 0551 148 5344 — 0553 068 1619
-🌐 masajur.com (link profilimizde)
-Fiyat: 5.699 TL (2025 fiyatı, zamsız)
-Masajur'da elektriksel kas uyarımı, ısı, masaj, traksiyon ve akupresür bir arada; hepsi aynı seansta eş zamanlı olarak boyun bölgesine uygulanıyor.`,
-`Merhaba, ürünümüzün güncel fiyatı 5.699 TL'dir.
-✅ Kapıda ödeme seçeneğimiz mevcuttur.
-🚚 Tüm siparişlerde ücretsiz kargo yapılmaktadır.
-🎁 Ayrıca her siparişe Ortopedik Visco Yastık hediye edilmektedir.
-Masajur, ilk kullanımda dahi rahatlama sağlayan, düzenli kullanımda ise boyun bölgesine uzun vadeli destek sunan bir fizik tedavi cihazıdır. Kullanıcılarımızın %98'i memnuniyet bildirmiştir.
-Ayrıca 14 gün iade garantisi ile ürünü tamamen risksiz şekilde deneyebilirsiniz.
-📍 Depomuz İstanbul Kartal'da, kliniğimiz ise İstanbul Maltepe'dedir. Dilerseniz bizi ziyaret ederek ürünü yerinde inceleyebilir ve satın alabilirsiniz.
-📞 Bize 12.00 - 20.00 saatleri arasında 0553 068 16 19 veya 0551 148 53 44 numaralarından ulaşabilirsiniz. Çalışma saatleri dışında ise WhatsApp üzerinden mesaj bırakabilirsiniz.
-🛒 Detaylı bilgi almak veya sipariş vermek için profilimizdeki bağlantıya tıklayabilirsiniz. www.masajur.com`
+`Merhaba 😊 Güncel fiyat ve kampanya bilgilerine profilimizdeki bağlantıdan ulaşabilirsiniz 🌐 Fiyatımız web sitemizde herkese açık olarak yer almakta ve sabit tutulmaktadır. Detayları sizinle paylaştık. Mesaj kutunuzu kontrol ediniz 📩`,
+`Merhaba 😊 Güncel fiyat ve kampanya detaylarını profilimizdeki bağlantı üzerinden inceleyebilirsiniz 🌐 Fiyat bilgimiz web sitemizde herkese açık ve sabittir. Aklınızdaki sorular için size mesaj gönderdik. Mesaj kutunuzu kontrol ediniz 📩`,
+`Merhaba 😊 Masajur'un güncel fiyatı ve kampanya seçenekleri profilimizdeki bağlantıda yer alıyor 🌐 Fiyatımız web sitemizde herkes için açık ve sabit olarak yayınlanmaktadır. Detayları mesaj olarak ilettik. Mesaj kutunuzu kontrol ediniz 📩`,
+`Merhaba 😊 Güncel fiyat ve kampanya bilgilerini profilimizdeki bağlantıdan görebilirsiniz 🌐 Fiyat bilgimiz web sitemizde şeffaf şekilde paylaşılmakta ve sabit tutulmaktadır. Sorularınızı yanıtlamak için size DM'den ulaştık. Mesaj kutunuzu kontrol ediniz 📩`,
+`Merhaba 😊 Güncel fiyat, kampanya ve ürün detayları için profilimizdeki bağlantıyı inceleyebilirsiniz 🌐 Fiyatımız web sitemizde herkese açık şekilde görüntülenebilir ve sabittir. Ek bilgi için size DM üzerinden de mesaj ilettik. Mesaj kutunuzu kontrol ediniz 📩`
 ];
 
 // Yorumun fiyat/nasil alinir/siparis gibi bir sey sorup sormadigini kontrol eder.
@@ -358,7 +367,7 @@ function yorumFiyatSiparisSoruyorMu(mesaj) {
 }
 
 // Redis'teki sayaci arttirip PUBLIC_YORUM_CEVAPLARI_FIYAT_SIPARIS icinde
-// SIRADAKI metni dondurur (1, 2, 3, 4, tekrar 1, 2, 3, 4...).
+// SIRADAKI metni dondurur (1, 2, 3, 4, 5, tekrar 1, 2, 3, 4, 5...).
 async function siradakiFiyatSiparisYanitiniGetir() {
   try {
     const sayac = await redis.incr("ig-fiyat-siparis-yorum-sayac");
@@ -701,11 +710,13 @@ module.exports = async (req, res) => {
 
           // OLUMLU/NOTR ise eskisi gibi devam:
           // 1) Yorumun ALTINA public cevap: fiyat/nasil alinir/siparis gibi
-          // bir sey soruyorsa SIRAYLA (rotasyon) o gruptan, degilse genel
-          // gruptan RASTGELE.
+          // bir sey soruyorsa SIRAYLA (rotasyon) hazir FIYAT_SIPARIS
+          // grubundan; degilse Claude'a o yoruma OZEL bir cevap urettirilir
+          // (yorumaPublicAICevapUret) - AI hata verirse sabit
+          // PUBLIC_YORUM_AI_FALLBACK metni kullanilir.
           const publicYanitMetni = yorumFiyatSiparisSoruyorMu(yorumMetni)
             ? await siradakiFiyatSiparisYanitiniGetir()
-            : rastgelePublicYanitSec();
+            : (await yorumaPublicAICevapUret(yorumMetni)) || PUBLIC_YORUM_AI_FALLBACK;
           await yorumaPublicYanitVer(yorumId, publicYanitMetni);
 
           // 2) Yorumu yapan kisiye OZEL mesaj (DM) - Claude'dan satis odakli,
