@@ -217,6 +217,51 @@ async function logFaturaToSheets(orderNumber, tip, aliciAdi, tutar, status) {
   }
 }
 
+// 2026-09-15 EKLENDI: yeni "Masajur Muhasebe" Google Sheets dosyasina siparis
+// karti gonderir (Sipariş Özet sekmesi). SADECE fatura basariyla kesildikten
+// SONRA, akisin en sonunda cagrilir.
+//
+// Onemli tasarim kararlari:
+// - process.env.MUHASEBE_SHEETS_URL tanimli degilse sessizce hicbir sey yapmaz
+//   (yani bu env degiskeni eklenmeden de fatura akisi eskisi gibi calisir).
+// - TEKRAR DENEME YOK - #12558 dersi (bkz. logFaturaToSheets yorumu).
+// - Hicbir hata disari yayilmaz: bu fonksiyon patlasa bile fatura zaten
+//   kesilmis, Redis bayragi yazilmis ve Shopify etiketlenmis oluyor.
+// - Ham veri gonderiyoruz (tarih, siparis no, tutar, odeme tipi); urun/kargo
+//   maliyeti, komisyon ve net kar hesabini Sheets tarafindaki formuller
+//   yapiyor - boylece bir maliyet degistiginde KOD DEPLOY ETMEDEN sadece
+//   Sheets'teki "Sabitler" sekmesi guncellenerek her sey duzeltilebiliyor.
+async function logSiparisMuhasebe(orderNumber, order, payload, sonuc) {
+  try {
+    if (!process.env.MUHASEBE_SHEETS_URL) return;
+
+    const body = JSON.stringify({
+      type: "siparis",
+      siparisNo: String(orderNumber),
+      tarih: new Date().toISOString(),
+      musteri: payload.aliciUnvanAdSoyad || "",
+      odemeTipi: isKapidaOdemeSiparis(order) ? "kapida" : "online",
+      gelir: Number(order.total_price) || 0,
+      faturaNo: (sonuc && sonuc.faturaNo) ? String(sonuc.faturaNo) : ""
+    });
+
+    try {
+      const resp = await fetchWithTimeout(process.env.MUHASEBE_SHEETS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body
+      }, 15000);
+      if (!resp.ok) {
+        console.error("MUHASEBE LOG: HTTP " + resp.status + " - satir yazilmis OLABILIR, mukerrer kayit riski yuzunden TEKRAR DENENMIYOR:", orderNumber);
+      }
+    } catch (e) {
+      console.error("MUHASEBE LOG HATA - satir yazilmis OLABILIR, mukerrer kayit riski yuzunden TEKRAR DENENMIYOR:", orderNumber, e && e.message ? e.message : e);
+    }
+  } catch (e) {
+    console.error("MUHASEBE LOG HATA:", e && e.message ? e.message : e);
+  }
+}
+
 const MYSOFT_API_BASE_URL = process.env.MYSOFT_API_BASE_URL || "https://edocumentapi.mysoft.com.tr";
 
 let cachedToken = null;
@@ -614,6 +659,11 @@ module.exports = async (req, res) => {
       await tagOrderAsInvoiced(order);
       await logFaturaToSheets(orderNumber, faturaTipi, payload.aliciUnvanAdSoyad, payload.genelToplam,
         "KESILDI OK - Fatura No: " + (sonuc.faturaNo || "-") + " ETTN: " + (sonuc.faturaEttn || "-"));
+      // 2026-09-15: muhasebe kaydi EN SONDA - fatura akisinin kritik adimlari
+      // (Redis bayragi, Shopify etiketi, denetim logu) bu noktada tamamlanmis
+      // durumda, dolayisiyla bu cagri gecikse veya patlasa bile hicbir sey
+      // bozulmaz. Bilerek en sona kondu.
+      await logSiparisMuhasebe(orderNumber, order, payload, sonuc);
       return res.status(200).json({ ok: true, sonuc });
     } else if (sonuc.belirsiz) {
       // Zaman asimi/baglanti hatasi - fatura Mysoft'ta GERCEKTE olusmus
