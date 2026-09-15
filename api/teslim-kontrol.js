@@ -330,6 +330,47 @@ async function alreadyFlaggedReturnedToCompany(orderNumber) {
     return !!v;
   } catch (e) { return false; }
 }
+// 2026-09-15 EKLENDI: "kapidan donen" zararini yeni "Masajur Muhasebe" Google
+// Sheets dosyasina yazar (Kapıdan Dönen sekmesi).
+//
+// Onemli tasarim kararlari:
+// - process.env.MUHASEBE_SHEETS_URL tanimli degilse sessizce hicbir sey yapmaz.
+// - TEKRAR DENEME YOK (#12558 dersi) - Apps Script cevabi bize ulasmasa bile
+//   satiri cogu zaman ZATEN eklemis oluyor; tekrar denemek mukerrer satir
+//   riski yaratir. Muhasebe tarafinda ayrica siparis no bazli mukerrer
+//   kontrolu de var.
+// - Hicbir hata disari yayilmaz; bu fonksiyon patlasa bile teslim-kontrol
+//   akisi (Redis bayragi + alarm kaydi) zaten tamamlanmis oluyor.
+// - Sadece HAM veri gonderiyoruz (tarih, siparis no, sebep). Kargo zarari
+//   (549 TL) ve o gunku ortalama reklam maliyeti hesabini Sheets'teki
+//   formuller yapiyor - boylece rakamlar degistiginde KOD DEPLOY ETMEDEN
+//   sadece Sheets'teki "Sabitler" sekmesi guncellenebiliyor.
+async function logKapidanDonenMuhasebe(orderNumber, iadeSebebi) {
+  try {
+    if (!process.env.MUHASEBE_SHEETS_URL) return;
+    const body = JSON.stringify({
+      type: "kapidan_donen",
+      siparisNo: String(orderNumber),
+      tarih: new Date().toISOString(),
+      sebep: iadeSebebi ? String(iadeSebebi) : ""
+    });
+    try {
+      const resp = await fetchWithTimeout(process.env.MUHASEBE_SHEETS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body
+      }, 15000);
+      if (!resp.ok) {
+        console.error("MUHASEBE LOG (kapidan donen): HTTP " + resp.status + " - satir yazilmis OLABILIR, TEKRAR DENENMIYOR:", orderNumber);
+      }
+    } catch (e) {
+      console.error("MUHASEBE LOG (kapidan donen) HATA - satir yazilmis OLABILIR, TEKRAR DENENMIYOR:", orderNumber, e && e.message ? e.message : e);
+    }
+  } catch (e) {
+    console.error("MUHASEBE LOG (kapidan donen) HATA:", e && e.message ? e.message : e);
+  }
+}
+
 async function isaretleIadeGorulduSirkete(orderNumber, iadeSebebi) {
   try {
     await redis.set("sirkete-iade-gorundu:" + orderNumber, "1", { ex: 90 * 24 * 3600 });
@@ -337,6 +378,11 @@ async function isaretleIadeGorulduSirkete(orderNumber, iadeSebebi) {
   const mesaj = "PAKET MUSTERIYE ULASMADAN SIRKETE IADE EDILDI/REDDEDILDI - FATURA KESILMEDI - MANUEL KONTROL/YENIDEN GONDERIM GEREKEBILIR" +
     (iadeSebebi ? " - Sebep: " + iadeSebebi : "");
   await logTeslimAlarmToSheets(orderNumber, 0, mesaj);
+  // Muhasebe kaydi EN SONDA - Redis bayragi ve alarm kaydi bu noktada zaten
+  // tamamlanmis durumda, dolayisiyla bu cagri gecikse veya patlasa bile
+  // teslim-kontrol akisinda hicbir sey bozulmaz. Bu fonksiyon her iki
+  // cagri noktasindan da (normal akis ve tarama) otomatik olarak calisir.
+  await logKapidanDonenMuhasebe(orderNumber, iadeSebebi);
 }
 
 // ============ TARAMA MODU (guvenlik agi) ============
