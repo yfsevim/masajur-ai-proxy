@@ -62,6 +62,27 @@ const FAILED_REASON_CODES = ["AAB", "MSA"];
 const TESLIM_BASARISIZ_TEMPLATE = "teslim_basarisiz";
 const TESLIM_BASARISIZ_LANG = "tr";
 
+// 2026-09-17 EKLENDI - KAPIDAN DONEN AKISI
+// Paket musteriye ulasmadan sirkete geri dondugunde iki mesaj gidiyor:
+//   1) MUSTERIYE  : "kapidan_donen_kurtarma" - yeniden gonderim teklifi (satisi kurtarma)
+//   2) YETKILILERE: "kapidan_donen_alarm"    - siparis no + ad + telefon + sebep
+// Ikisi de isaretleIadeGorulduSirkete() icinden, EN SONDA tetikleniyor -
+// yani fatura/Redis/Sheets tarafi zaten tamamlanmis oluyor, bu cagrilar
+// patlasa bile mevcut akista hicbir sey bozulmaz.
+//
+// DIL KODU NOTU: kurtarma sablonu Meta'da yanlislikla "English" olarak
+// kaydedildi (metin Turkce, sadece etiketi ingilizce). WhatsApp bu etiketi
+// ceviri icin kullanmiyor, sablonda ne yaziyorsa onu gonderiyor - bu yuzden
+// sablonu silip yeniden olusturmak yerine dil kodunu "en" biraktik. Alarm
+// sablonu normal sekilde "tr".
+const KAPIDAN_DONEN_KURTARMA_TEMPLATE = "kapidan_donen_kurtarma";
+const KAPIDAN_DONEN_KURTARMA_LANG = "en";
+const KAPIDAN_DONEN_ALARM_TEMPLATE = "kapidan_donen_alarm";
+const KAPIDAN_DONEN_ALARM_LANG = "tr";
+
+// Alarmin gidecegi yetkili numaralar (webhook-process.js'tekiyle AYNI iki numara)
+const ALERT_NUMBERS = ["905530681619", "905511485344"];
+
 // Arka plan/batch isi oldugu icin webhook-process.js'in musteri sohbeti
 // devre kesicisinden AYRI, kendi ortak anahtarini kullanir.
 const cb = yurtici.createCircuitBreaker("yurtici-cb");
@@ -371,7 +392,105 @@ async function logKapidanDonenMuhasebe(orderNumber, iadeSebebi) {
   }
 }
 
-async function isaretleIadeGorulduSirkete(orderNumber, iadeSebebi) {
+// WhatsApp sablon parametreleri satir sonu, sekme veya 4+ ardisik bosluk
+// iceremez - Meta bu tur parametreleri reddediyor. Yurtici'den gelen iade
+// sebebi metni bunlari icerebildigi icin temizleyip kisaltiyoruz.
+function temizleParam_(v, varsayilan) {
+  var s = String(v == null ? "" : v)
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!s) return varsayilan;
+  return s.slice(0, 200);
+}
+
+// Musteriye: "paketiniz geri dondu, yeniden gonderelim mi?" (satisi kurtarma)
+async function sendKapidanDonenKurtarma(phone, name, orderNumber) {
+  if (!phone) {
+    console.log("KAPIDAN DONEN KURTARMA: telefon yok, musteriye mesaj gonderilemedi:", orderNumber);
+    return;
+  }
+  try {
+    const resp = await fetchWithTimeout(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "template",
+          template: {
+            name: KAPIDAN_DONEN_KURTARMA_TEMPLATE,
+            language: { code: KAPIDAN_DONEN_KURTARMA_LANG },
+            components: [
+              {
+                type: "body",
+                parameters: [
+                  { type: "text", text: temizleParam_(name, "değerli müşterimiz") },
+                  { type: "text", text: temizleParam_(orderNumber, "-") }
+                ]
+              }
+            ]
+          }
+        })
+      },
+      12000
+    );
+    const data = await resp.json().catch(() => ({}));
+    console.log("KAPIDAN DONEN KURTARMA (" + orderNumber + "):", readWaStatus(data));
+  } catch (e) {
+    console.error("KAPIDAN DONEN KURTARMA HATA (" + orderNumber + "):", e && e.message ? e.message : e);
+  }
+}
+
+// Yetkililere: siparis no + musteri + telefon + sebep
+async function sendKapidanDonenAlarm(orderNumber, musteriAdi, musteriTelefon, sebep) {
+  for (const numara of ALERT_NUMBERS) {
+    try {
+      const resp = await fetchWithTimeout(
+        `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            messaging_product: "whatsapp",
+            to: numara,
+            type: "template",
+            template: {
+              name: KAPIDAN_DONEN_ALARM_TEMPLATE,
+              language: { code: KAPIDAN_DONEN_ALARM_LANG },
+              components: [
+                {
+                  type: "body",
+                  parameters: [
+                    { type: "text", text: temizleParam_(orderNumber, "-") },
+                    { type: "text", text: temizleParam_(musteriAdi, "Bilinmiyor") },
+                    { type: "text", text: temizleParam_(musteriTelefon, "Bilinmiyor") },
+                    { type: "text", text: temizleParam_(sebep, "Belirtilmemiş") }
+                  ]
+                }
+              ]
+            }
+          })
+        },
+        12000
+      );
+      const data = await resp.json().catch(() => ({}));
+      console.log("KAPIDAN DONEN ALARM (" + numara + " / " + orderNumber + "):", readWaStatus(data));
+    } catch (e) {
+      console.error("KAPIDAN DONEN ALARM HATA (" + numara + " / " + orderNumber + "):", e && e.message ? e.message : e);
+    }
+  }
+}
+
+async function isaretleIadeGorulduSirkete(orderNumber, iadeSebebi, phone, name) {
   try {
     await redis.set("sirkete-iade-gorundu:" + orderNumber, "1", { ex: 90 * 24 * 3600 });
   } catch (e) {}
@@ -383,6 +502,14 @@ async function isaretleIadeGorulduSirkete(orderNumber, iadeSebebi) {
   // teslim-kontrol akisinda hicbir sey bozulmaz. Bu fonksiyon her iki
   // cagri noktasindan da (normal akis ve tarama) otomatik olarak calisir.
   await logKapidanDonenMuhasebe(orderNumber, iadeSebebi);
+
+  // 2026-09-17 EKLENDI: WhatsApp mesajlari. Bunlar da EN SONDA - Redis
+  // bayragi, Sheets alarmi ve muhasebe kaydi bu noktada tamamlanmis durumda.
+  // Bu fonksiyon zaten siparis basina SADECE BIR KEZ cagriliyor (cagri
+  // noktalarinda alreadyFlaggedReturnedToCompany kontrolu var), dolayisiyla
+  // musteriye veya yetkililere mukerrer mesaj gitmez.
+  await sendKapidanDonenKurtarma(phone, name, orderNumber);
+  await sendKapidanDonenAlarm(orderNumber, name, phone, iadeSebebi);
 }
 
 // ============ TARAMA MODU (guvenlik agi) ============
@@ -541,7 +668,17 @@ async function handleTarama(req, res) {
         // aday listesinden dusmesi icin kalici bir isaret birak (bir kereye
         // mahsus bildirim, tekrar tekrar aynisini dusurmesin).
         const zatenIsaretli = await alreadyFlaggedReturnedToCompany(String(no));
-        if (!zatenIsaretli) await isaretleIadeGorulduSirkete(String(no), detail.iadeSebebi);
+        if (!zatenIsaretli) {
+          // 2026-09-17: musteriye kurtarma mesaji ve yetkililere alarm
+          // gonderebilmek icin telefon/isim bilgisini Shopify siparisinden
+          // cikariyoruz (normal akista bunlar zaten QStash govdesinden geliyor).
+          const iadeTelefon = normalizeTelefon(order.phone || (order.shipping_address && order.shipping_address.phone));
+          const iadeMusteriAdi =
+            (order.customer && ((order.customer.first_name || "") + " " + (order.customer.last_name || "")).trim()) ||
+            (order.shipping_address && order.shipping_address.name) ||
+            "";
+          await isaretleIadeGorulduSirkete(String(no), detail.iadeSebebi, iadeTelefon, iadeMusteriAdi);
+        }
         detaylar.push(no + ":SIRKETE-IADE");
       } else if (detail && detail.reasonId && FAILED_REASON_CODES.includes(detail.reasonId)) {
         const phone = normalizeTelefon(order.phone || (order.shipping_address && order.shipping_address.phone));
@@ -633,7 +770,12 @@ module.exports = async (req, res) => {
     if (detail && detail.sirketeIadeEdildi) {
       console.log("TESLIM-KONTROL: paket musteriye ulasmadan sirkete iade edildi, fatura kesilmeyecek:", orderNumber);
       const zatenIsaretli = await alreadyFlaggedReturnedToCompany(orderNumber);
-      if (!zatenIsaretli) await isaretleIadeGorulduSirkete(orderNumber, detail.iadeSebebi);
+      if (!zatenIsaretli) {
+        // name varsayilani "Merhaba" oldugu icin sablona oyle gitmesin -
+        // gercek isim yoksa bos gec, sablon tarafi "değerli müşterimiz" yazar.
+        const iadeMusteriAdi = (name && name !== "Merhaba") ? name : "";
+        await isaretleIadeGorulduSirkete(orderNumber, detail.iadeSebebi, phone, iadeMusteriAdi);
+      }
       return res.status(200).send("OK - paket sirkete iade edildi, fatura kesilmedi");
     }
 
