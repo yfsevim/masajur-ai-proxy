@@ -323,6 +323,59 @@ async function logTeslimBasarisizToSheets(phone, name, orderNumber, branch, stat
   }
 }
 
+// 2026-09-17 EKLENDI: teslimat gunu hatirlatmasini eski BOTSohbet Google
+// Sheets dosyasina yazar ("Teslimat Günü Mesajları" sekmesi).
+// Apps Script tarafinda type:"teslimat_gunu" dali hazir ve deploy edilmis durumda.
+//
+// TEKRAR DENEME YOK (#12558 dersi): Apps Script cevabi bize ulasmasa bile
+// satiri cogu zaman ZATEN eklemis oluyor; tekrar denemek mukerrer satir demek.
+// Hicbir hata disari yayilmaz - bu kayit patlasa bile musteriye mesaj zaten
+// gitmis, Redis bayragi zaten atilmis oluyor.
+async function logTeslimatGunuToSheets(orderNumber, name, phone, status) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    await fetchWithTimeout(process.env.SHEETS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "teslimat_gunu",
+        orderNumber: String(orderNumber || ""),
+        name: String(name || ""),
+        phone: String(phone || ""),
+        status: String(status || "")
+      })
+    }, 15000);
+  } catch (e) {
+    console.error("TESLIM-KONTROL: teslimat-gunu Sheets log HATA (TEKRAR DENENMIYOR):", e && e.message ? e.message : e);
+  }
+}
+
+// 2026-09-17 EKLENDI: kapidan donen siparis icin gonderilen IKI mesajin
+// (musteriye kurtarma + yetkililere alarm) sonucunu TEK satirda eski BOTSohbet
+// Google Sheets dosyasina yazar ("Kapıdan Dönen Mesajları" sekmesi).
+// Apps Script tarafinda type:"kapidan_donen_mesaj" dali hazir ve deploy edilmis.
+// Tekrar deneme yok, hata disari yayilmaz (yukaridakiyle ayni gerekce).
+async function logKapidanDonenMesajToSheets(orderNumber, name, phone, sebep, musteriMesaji, alarm) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    await fetchWithTimeout(process.env.SHEETS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "kapidan_donen_mesaj",
+        orderNumber: String(orderNumber || ""),
+        name: String(name || ""),
+        phone: String(phone || ""),
+        sebep: String(sebep || ""),
+        musteriMesaji: String(musteriMesaji || ""),
+        alarm: String(alarm || "")
+      })
+    }, 15000);
+  } catch (e) {
+    console.error("TESLIM-KONTROL: kapidan-donen-mesaj Sheets log HATA (TEKRAR DENENMIYOR):", e && e.message ? e.message : e);
+  }
+}
+
 // Kurye teslim edemedi (orn. AAB/MSA) -> musteriye "subeden teslim alabilirsiniz" mesaji
 async function sendTeslimBasarisizMesaji(phone, name, orderNumber, branch) {
   let waStatus;
@@ -492,19 +545,27 @@ async function sendTeslimatGunuMesaji(phone, name, orderNumber) {
       12000
     );
     const data = await resp.json().catch(() => ({}));
-    console.log("TESLIMAT GUNU (" + orderNumber + "):", readWaStatus(data));
+    const waStatus = readWaStatus(data);
+    console.log("TESLIMAT GUNU (" + orderNumber + "):", waStatus);
+    // Sheets kaydi EN SONDA - mesaj zaten gonderilmis durumda, bu satir
+    // yazilamasa bile akista hicbir sey degismiyor.
+    await logTeslimatGunuToSheets(orderNumber, name, phone, waStatus);
     return true;
   } catch (e) {
     console.error("TESLIMAT GUNU HATA (" + orderNumber + "):", e && e.message ? e.message : e);
+    await logTeslimatGunuToSheets(orderNumber, name, phone, "GITMEDI HATA: " + (e && e.message ? e.message : e));
     return false;
   }
 }
 
 // Musteriye: "paketiniz geri dondu, yeniden gonderelim mi?" (satisi kurtarma)
+// 2026-09-17: Sheets kaydi icin gonderim durumunu metin olarak DONDURUYOR.
+// Cagiran taraf (isaretleIadeGorulduSirkete) bu metni alarm sonucuyla birlikte
+// tek satirda Sheets'e yaziyor.
 async function sendKapidanDonenKurtarma(phone, name, orderNumber) {
   if (!phone) {
     console.log("KAPIDAN DONEN KURTARMA: telefon yok, musteriye mesaj gonderilemedi:", orderNumber);
-    return;
+    return "GONDERILMEDI: telefon yok";
   }
   try {
     const resp = await fetchWithTimeout(
@@ -537,14 +598,20 @@ async function sendKapidanDonenKurtarma(phone, name, orderNumber) {
       12000
     );
     const data = await resp.json().catch(() => ({}));
-    console.log("KAPIDAN DONEN KURTARMA (" + orderNumber + "):", readWaStatus(data));
+    const waStatus = readWaStatus(data);
+    console.log("KAPIDAN DONEN KURTARMA (" + orderNumber + "):", waStatus);
+    return waStatus;
   } catch (e) {
     console.error("KAPIDAN DONEN KURTARMA HATA (" + orderNumber + "):", e && e.message ? e.message : e);
+    return "GITMEDI HATA: " + (e && e.message ? e.message : e);
   }
 }
 
 // Yetkililere: siparis no + musteri + telefon + sebep
+// 2026-09-17: her numaranin sonucunu toplayip tek metin olarak donduruyor
+// (Sheets'teki "Yetkili Alarmi" sutununa yazilsin diye).
 async function sendKapidanDonenAlarm(orderNumber, musteriAdi, musteriTelefon, sebep) {
+  const sonuclar = [];
   for (const numara of ALERT_NUMBERS) {
     try {
       const resp = await fetchWithTimeout(
@@ -579,11 +646,15 @@ async function sendKapidanDonenAlarm(orderNumber, musteriAdi, musteriTelefon, se
         12000
       );
       const data = await resp.json().catch(() => ({}));
-      console.log("KAPIDAN DONEN ALARM (" + numara + " / " + orderNumber + "):", readWaStatus(data));
+      const waStatus = readWaStatus(data);
+      console.log("KAPIDAN DONEN ALARM (" + numara + " / " + orderNumber + "):", waStatus);
+      sonuclar.push(numara + ": " + waStatus);
     } catch (e) {
       console.error("KAPIDAN DONEN ALARM HATA (" + numara + " / " + orderNumber + "):", e && e.message ? e.message : e);
+      sonuclar.push(numara + ": GITMEDI HATA: " + (e && e.message ? e.message : e));
     }
   }
+  return sonuclar.join(" | ");
 }
 
 async function isaretleIadeGorulduSirkete(orderNumber, iadeSebebi, phone, name) {
@@ -604,8 +675,13 @@ async function isaretleIadeGorulduSirkete(orderNumber, iadeSebebi, phone, name) 
   // Bu fonksiyon zaten siparis basina SADECE BIR KEZ cagriliyor (cagri
   // noktalarinda alreadyFlaggedReturnedToCompany kontrolu var), dolayisiyla
   // musteriye veya yetkililere mukerrer mesaj gitmez.
-  await sendKapidanDonenKurtarma(phone, name, orderNumber);
-  await sendKapidanDonenAlarm(orderNumber, name, phone, iadeSebebi);
+  const kurtarmaSonuc = await sendKapidanDonenKurtarma(phone, name, orderNumber);
+  const alarmSonuc = await sendKapidanDonenAlarm(orderNumber, name, phone, iadeSebebi);
+
+  // 2026-09-17: iki mesajin sonucu TEK satirda eski BOTSohbet Sheets dosyasina
+  // yaziliyor. En sonda - buraya gelindiginde Redis bayragi, fatura alarmi,
+  // muhasebe kaydi ve iki WhatsApp mesaji zaten tamamlanmis durumda.
+  await logKapidanDonenMesajToSheets(orderNumber, name, phone, iadeSebebi, kurtarmaSonuc, alarmSonuc);
 }
 
 // ============ TARAMA MODU (guvenlik agi) ============
