@@ -83,6 +83,31 @@ const KAPIDAN_DONEN_ALARM_LANG = "tr";
 // Alarmin gidecegi yetkili numaralar (webhook-process.js'tekiyle AYNI iki numara)
 const ALERT_NUMBERS = ["905530681619", "905511485344"];
 
+// 2026-09-17 EKLENDI - TESLIMAT GUNU HATIRLATMASI
+// Amac: kapida odemede "alici kabul etmedi" iadelerini azaltmak. Musteri
+// siparisi anlik heyecanla veriyor, kargo 3-5 gun sonra geldiginde heyecan
+// sonmus oluyor ve pesin para vermedigi icin vazgecmesinin hicbir maliyeti
+// yok. Paket kuryeye zimmetlendigi gun giden kisa bir mesaj hem satin alma
+// hissini tazeliyor hem de - en onemlisi - tereddutlu musteriye KONUSMA
+// KAPISI aciyor: kuryeye "almiyorum" demek yerine bize yaziyor, bot da
+// itirazi karsilayip satisi kurtarabiliyor.
+//
+// TETIKLEYICI (12988 numarali gercek siparisin Yurtici cevabindan dogrulandi):
+//   cargoEventId        = "YK"   -> Kargo Yuklendi
+//   cargoReasonId       = "GOK"  -> Kuryede/zimmetlendi (dagitima cikti)
+//   operationStatus     = "IND"  -> Kargo teslimattadir
+// Bunlardan en net olani cargoReasonId === "GOK". Bu alan getKargoDetail()
+// tarafindan zaten "reasonId" olarak donduruluyordu.
+//
+// DIKKAT: "GOK", asagidaki FAILED_REASON_CODES ("AAB"/"MSA") ile CAKISMAZ -
+// onlar teslimat DENEMESI BASARISIZ oldugunda geliyor, bu ise paket daha
+// kuryenin elindeyken. Ayrica bu kontrol gercekTeslim ve sirketeIadeEdildi
+// kontrollerinden SONRA yapiliyor, yani paket teslim edilmis veya geri
+// donmusse mesaj hic gonderilmiyor.
+const TESLIMAT_GUNU_TEMPLATE = "teslimat_gunu_hatirlatma";
+const TESLIMAT_GUNU_LANG = "tr";
+const DAGITIMA_CIKTI_REASON_CODES = ["GOK"];
+
 // Arka plan/batch isi oldugu icin webhook-process.js'in musteri sohbeti
 // devre kesicisinden AYRI, kendi ortak anahtarini kullanir.
 const cb = yurtici.createCircuitBreaker("yurtici-cb");
@@ -167,8 +192,13 @@ async function getKargoDetail(orderNumber) {
     gercekTeslim: raw.gercektenMusteriyeTeslimEdildi,        // DOGRU alan: gercekten musteriye mi teslim edildi
     sirketeIadeEdildi: raw.sirketeIadeEdildi,                // DLV ama aslinda paket bize geri donmus/reddedilmis
     iadeSebebi: raw.rejectReasonExplanation || raw.rejectStatusExplanation || null, // orn. "Alici Kabul Etmedi (...)"
-    reasonId: raw.cargoReasonId,          // orn. "AAB"/"MSA"
+    reasonId: raw.cargoReasonId,          // orn. "AAB"/"MSA"/"GOK"
     reasonExplanation: raw.cargoReasonExplanation,
+    // 2026-09-17 EKLENDI: kargo hareketi (orn. "YK" = Kargo Yuklendi). Teslimat
+    // gunu hatirlatmasinin dogru ana denk gelip gelmedigini loglardan takip
+    // edebilmek icin ekledi - karar reasonId uzerinden veriliyor.
+    eventId: raw.cargoEventId,
+    eventExplanation: raw.cargoEventExplanation,
     branch: raw.deliveryUnitName          // gonderinin bekledigi sube
   };
 }
@@ -230,6 +260,28 @@ async function alreadyNotifiedFailed(orderNumber) {
 async function markNotifiedFailed(orderNumber) {
   try {
     await redis.set("teslim-basarisiz-bildirildi:" + orderNumber, "1", { ex: 30 * 24 * 3600 });
+  } catch (e) {}
+}
+
+// 2026-09-17: teslimat gunu hatirlatmasi da siparis basina SADECE BIR KEZ
+// gitmeli. Paket kuryede oldugu surece her saatlik kontrolde "GOK" gorunmeye
+// devam ediyor; bayrak olmasa musteriye saatte bir mesaj giderdi. Ayrica
+// paket ilk gun teslim edilemeyip ertesi gun tekrar dagitima cikarsa da
+// ikinci bir mesaj gitmesin istiyoruz - o senaryoyu zaten AAB/MSA
+// bildirimi ("subeden teslim alabilirsiniz") karsiliyor.
+async function alreadyNotifiedTeslimatGunu(orderNumber) {
+  try {
+    const v = await redis.get("teslimat-gunu-bildirildi:" + orderNumber);
+    return !!v;
+  } catch (e) {
+    // Redis erisilemezse GUVENLI TARAF: mesaj GONDERME. Mukerrer mesaj,
+    // hic mesaj gitmemesinden daha kotu (musteriyi rahatsiz eder).
+    return true;
+  }
+}
+async function markNotifiedTeslimatGunu(orderNumber) {
+  try {
+    await redis.set("teslimat-gunu-bildirildi:" + orderNumber, "1", { ex: 30 * 24 * 3600 });
   } catch (e) {}
 }
 
@@ -402,6 +454,50 @@ function temizleParam_(v, varsayilan) {
     .trim();
   if (!s) return varsayilan;
   return s.slice(0, 200);
+}
+
+// Musteriye: "siparisiniz bugun teslim edilecek" (kapida vazgecmeyi azaltmak icin)
+async function sendTeslimatGunuMesaji(phone, name, orderNumber) {
+  if (!phone) {
+    console.log("TESLIMAT GUNU: telefon yok, mesaj gonderilemedi:", orderNumber);
+    return false;
+  }
+  try {
+    const resp = await fetchWithTimeout(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "template",
+          template: {
+            name: TESLIMAT_GUNU_TEMPLATE,
+            language: { code: TESLIMAT_GUNU_LANG },
+            components: [
+              {
+                type: "body",
+                parameters: [
+                  { type: "text", text: temizleParam_(name, "değerli müşterimiz") }
+                ]
+              }
+            ]
+          }
+        })
+      },
+      12000
+    );
+    const data = await resp.json().catch(() => ({}));
+    console.log("TESLIMAT GUNU (" + orderNumber + "):", readWaStatus(data));
+    return true;
+  } catch (e) {
+    console.error("TESLIMAT GUNU HATA (" + orderNumber + "):", e && e.message ? e.message : e);
+    return false;
+  }
 }
 
 // Musteriye: "paketiniz geri dondu, yeniden gonderelim mi?" (satisi kurtarma)
@@ -680,6 +776,29 @@ async function handleTarama(req, res) {
           await isaretleIadeGorulduSirkete(String(no), detail.iadeSebebi, iadeTelefon, iadeMusteriAdi);
         }
         detaylar.push(no + ":SIRKETE-IADE");
+      } else if (detail && detail.reasonId && DAGITIMA_CIKTI_REASON_CODES.includes(detail.reasonId)) {
+        // 2026-09-17: normal akis (saatlik QStash zinciri) bu siparisi bir
+        // sekilde kacirmissa tarama da teslimat gunu mesajini gonderebilsin.
+        // Redis bayragi ortak oldugu icin iki yoldan da tetiklense musteriye
+        // yalnizca BIR mesaj gider.
+        const dagitimTelefon = normalizeTelefon(order.phone || (order.shipping_address && order.shipping_address.phone));
+        if (dagitimTelefon) {
+          const zatenBildirildi = await alreadyNotifiedTeslimatGunu(String(no));
+          if (!zatenBildirildi) {
+            const dagitimMusteriAdi =
+              (order.customer && ((order.customer.first_name || "") + " " + (order.customer.last_name || "")).trim()) ||
+              (order.shipping_address && order.shipping_address.name) ||
+              "";
+            await sendTeslimatGunuMesaji(dagitimTelefon, dagitimMusteriAdi, String(no));
+            await markNotifiedTeslimatGunu(String(no));
+            bildirimSayisi++;
+            detaylar.push(no + ":TESLIMAT-GUNU");
+          } else {
+            detaylar.push(no + ":DAGITIMDA");
+          }
+        } else {
+          detaylar.push(no + ":DAGITIMDA(telefon-yok)");
+        }
       } else if (detail && detail.reasonId && FAILED_REASON_CODES.includes(detail.reasonId)) {
         const phone = normalizeTelefon(order.phone || (order.shipping_address && order.shipping_address.phone));
         if (phone) {
@@ -706,7 +825,7 @@ async function handleTarama(req, res) {
     await taramaCursorYaz(yeniCursor);
 
     const ozet = kontrolSayisi + " siparis kontrol edildi, " + faturaSayisi + " fatura tetiklendi, " +
-      bildirimSayisi + " teslim-basarisiz bildirimi gonderildi (toplam aday: " + adaylar.length + ") - " +
+      bildirimSayisi + " musteri bildirimi gonderildi (teslim-basarisiz + teslimat-gunu) (toplam aday: " + adaylar.length + ") - " +
       detaylar.join(", ");
     console.log("TARAMA OZET:", ozet);
     await logTaramaOzetToSheets(ozet);
@@ -777,6 +896,22 @@ module.exports = async (req, res) => {
         await isaretleIadeGorulduSirkete(orderNumber, detail.iadeSebebi, phone, iadeMusteriAdi);
       }
       return res.status(200).send("OK - paket sirkete iade edildi, fatura kesilmedi");
+    }
+
+    // 2026-09-17: paket kuryeye zimmetlendiyse (GOK) musteriye bir kereye
+    // mahsus "bugun teslim edilecek" hatirlatmasi gonder. Buraya ancak paket
+    // TESLIM EDILMEMISSE ve GERI DONMEMISSE geliniyor (ikisi de yukarida
+    // return ediyor), yani mesaj sadece paket gercekten kuryenin elindeyken
+    // gidiyor. Akisin geri kalanini hic etkilemiyor - mesaj gitse de gitmese
+    // de asagidaki tekrar zamanlama aynen calisiyor.
+    if (detail && detail.reasonId && DAGITIMA_CIKTI_REASON_CODES.includes(detail.reasonId) && phone) {
+      const zatenBildirildi = await alreadyNotifiedTeslimatGunu(orderNumber);
+      if (!zatenBildirildi) {
+        console.log("TESLIM-KONTROL: paket dagitima cikti (" + detail.reasonId + "), teslimat gunu mesaji gonderiliyor:", orderNumber);
+        const musteriAdi = (name && name !== "Merhaba") ? name : "";
+        await sendTeslimatGunuMesaji(phone, musteriAdi, orderNumber);
+        await markNotifiedTeslimatGunu(orderNumber);
+      }
     }
 
     // Kurye teslim edemedi (orn. "AAB"/"MSA") ve musteriye daha once bildirim
