@@ -62,7 +62,15 @@ const ALERT_NUMBERS = ["905530681619", "905511485344"];
 const BAYRAK1 = "sepet-asama1:";         // <checkout id>
 const BAYRAK2 = "sepet-asama2:";         // <checkout id>
 const HEDIYE_SOZU = "hediye-sozu:";      // <telefon> - siparis gelince etiketlemek icin
+// 2026-09-18: TELEFON BAZLI KILIT. Gercek veride ayni musteri 1 dakika
+// arayla IKI ayri sepet acmis (Ayla F. - 31298247393370 ve 31298252701786).
+// Bayrak sadece sepet numarasina bagli olsaydi ayni kisiye ayni mesajdan
+// iki tane giderdi. Bu anahtar "bu telefona hangi sepet icin mesaj attik"
+// bilgisini tutuyor: baska bir sepet icin tekrar mesaj gitmiyor, ama AYNI
+// sepetin 2. asama mesaji engellenmiyor.
+const TELEFON_KILIDI = "sepet-telefon:";  // <telefon> -> checkout id
 const BAYRAK_OMRU = 7 * 24 * 3600;       // 7 gun
+const TELEFON_OMRU = 24 * 3600;          // 24 saat
 const HEDIYE_OMRU = 48 * 3600;           // 48 saat
 
 async function fetchWithTimeout(url, options, ms) {
@@ -168,6 +176,19 @@ async function bayrakVar(anahtar) {
 async function bayrakAt(anahtar, omur) {
   try { await redis.set(anahtar, "1", { ex: omur }); } catch (e) {}
 }
+async function degerOku(anahtar) {
+  try {
+    const v = await redis.get(anahtar);
+    return v == null ? "" : String(v);
+  } catch (e) {
+    // Redis okunamiyorsa guvenli taraf: "baska bir sepet icin kilitli" say,
+    // mesaj gonderme.
+    return "REDIS-HATASI";
+  }
+}
+async function degerYaz(anahtar, deger, omur) {
+  try { await redis.set(anahtar, String(deger), { ex: omur }); } catch (e) {}
+}
 
 // WhatsApp sablon mesaji gonder
 async function sablonGonder(phone, templateName, lang, ad, link) {
@@ -246,20 +267,30 @@ async function asamaBelirle(c, telefon) {
   if (yas > MAX_YAS_SAAT) return { asama: 0, sebep: "cok eski (" + yas.toFixed(1) + " saat)" };
   if (c.completed_at) return { asama: 0, sebep: "zaten tamamlanmis" };
 
-  const b1 = await bayrakVar(BAYRAK1 + c.id);
+  if (yas < ASAMA1_SAAT) return { asama: 0, sebep: "henuz erken (" + yas.toFixed(1) + " saat)" };
 
-  if (!b1) {
-    if (yas >= ASAMA1_SAAT) return { asama: 1, sebep: yas.toFixed(1) + " saat oldu" };
-    return { asama: 0, sebep: "henuz erken (" + yas.toFixed(1) + " saat)" };
+  // TELEFON KILIDI: bu numaraya baska bir sepet icin mesaj attiysak dur.
+  // Ayni sepetin devami ise (kilit bu sepete aitse) devam edilebilir.
+  const kilit = await degerOku(TELEFON_KILIDI + telefon);
+  if (kilit && kilit !== String(c.id)) {
+    return { asama: 0, sebep: "bu numaraya baska sepet icin mesaj gitti (" + kilit + ")" };
   }
 
   const b2 = await bayrakVar(BAYRAK2 + c.id);
-  if (!b2) {
-    if (yas >= ASAMA2_SAAT) return { asama: 2, sebep: yas.toFixed(1) + " saat oldu, hediye zamani" };
-    return { asama: 0, sebep: "1. mesaj gitti, 2. icin erken (" + yas.toFixed(1) + " saat)" };
+  if (b2) return { asama: 0, sebep: "hediye mesaji zaten gonderilmis" };
+
+  // 2. ASAMA PENCERESI: 3 saati gectiyse artik hediye mesaji gider.
+  // Bayat bir sepete once "sepetinde urun var" deyip 15 dakika sonra hediye
+  // teklifi gondermek kotu bir deneyim; 3 saati gecmis sepete DOGRUDAN
+  // hediye mesaji gidiyor (daha guclu teklif zaten o).
+  if (yas >= ASAMA2_SAAT) {
+    return { asama: 2, sebep: yas.toFixed(1) + " saat oldu, hediye mesaji" };
   }
 
-  return { asama: 0, sebep: "iki mesaj da gonderilmis" };
+  // 1. ASAMA PENCERESI: sadece 1-3 saat arasi.
+  const b1 = await bayrakVar(BAYRAK1 + c.id);
+  if (b1) return { asama: 0, sebep: "1. mesaj gitti, 2. icin erken (" + yas.toFixed(1) + " saat)" };
+  return { asama: 1, sebep: yas.toFixed(1) + " saat oldu, hatirlatma" };
 }
 
 // ============ TEST MODU (hicbir mesaj gondermez) ============
@@ -372,6 +403,7 @@ module.exports = async (req, res) => {
         // Bayrak, gonderim basarisiz olsa da atiliyor: mukerrer pazarlama
         // mesaji riskini tekrar deneme kazancina tercih etmiyoruz.
         await bayrakAt(BAYRAK1 + c.id, BAYRAK_OMRU);
+        await degerYaz(TELEFON_KILIDI + telefon, c.id, TELEFON_OMRU);
         console.log("SEPET ASAMA-1 (" + c.id + " / " + telefon + "):", durum);
         await logSepetToSheets(1, c.id, ad, telefon, c.total_price, durum);
         gonderilen1++;
@@ -379,6 +411,10 @@ module.exports = async (req, res) => {
       } else if (asama === 2) {
         const durum = await sablonGonder(telefon, SEPET2_TEMPLATE, SEPET2_LANG, ad, link);
         await bayrakAt(BAYRAK2 + c.id, BAYRAK_OMRU);
+        // 1. asama bayragini da atiyoruz: dogrudan 2. asamaya atlanmis
+        // olabilir, geriye donup hatirlatma mesaji gitmesin.
+        await bayrakAt(BAYRAK1 + c.id, BAYRAK_OMRU);
+        await degerYaz(TELEFON_KILIDI + telefon, c.id, TELEFON_OMRU);
         // Hediye sozu verildi: bu telefondan 48 saat icinde siparis gelirse
         // siparis-kayit.js Shopify'da siparisi "hediye-krem" diye etiketleyecek.
         await bayrakAt(HEDIYE_SOZU + telefon, HEDIYE_OMRU);
