@@ -9,14 +9,16 @@
 // IKI ASAMALI:
 //   1) Terk edildikten 1 SAAT sonra  -> "sepetinde urun var, tamamla"  (sepet_hatirlatma)
 //   2) Hala tamamlamadiysa 3 SAAT sonra -> "479 TL'lik krem hediye"    (sepet_hediye)
-// Musteri arada siparisi tamamlarsa Shopify o kaydi listeden dusuruyor,
-// ikinci mesaj KENDILIGINDEN gitmiyor - ayrica kontrol etmeye gerek yok.
+// Musteri AYNI sepeti tamamlarsa Shopify o kaydi listeden dusuruyor.
+// AMA bu yetmiyor - bkz. asagidaki "SIPARIS VERMIS MUSTERI" notu.
 //
 // IZIN NOTU: terk edilmis sepetler "read_orders" kapsami altinda
 // (Shopify'in kendi tanimi: "Siparisleri, islemleri, gonderimleri ve YARIM
 // BIRAKILMIS ODEMELERI goruntuleme"). Ayri bir izin GEREKMIYOR.
 //
 // GUVENLIK RAYLARI (bilincli kararlar):
+// - SIPARIS_GECMISI_GUN: son 30 gunde SIPARIS VERMIS bir telefona hic mesaj
+//   gitmiyor. (2026-09-18'de eklendi, gercek bir olay uzerine - asagida.)
 // - MAX_YAS_SAAT: 24 saatten eski sepetlere HIC dokunulmuyor. Ilk deploy'da
 //   gecmisteki onlarca eski sepete toplu mesaj gitmesini engelliyor.
 // - PARTI_LIMITI: tek calismada en fazla 10 mesaj. Ani mesaj patlamasi
@@ -50,6 +52,27 @@ const MIN_MESAJ_ARALIGI_SAAT = 2;
 
 // --- Guvenlik sinirlari ---
 const PARTI_LIMITI = 10;                 // tek calismada en fazla kac mesaj
+
+// --- SIPARIS VERMIS MUSTERI KONTROLU ---
+// 2026-09-18, GERCEK OLAY: Ibrahim O. bir gun once siparisini vermisti. Ertesi
+// gun siteye tekrar girdi ve yeni bir sepet birakti. O YENI sepetin
+// completed_at'i bos oldugu icin kod "bu kisi almamis" sandi ve "sepetini
+// tamamla" mesaji gonderdi. Ikinci mesaji da alsaydi daha kotu olurdu:
+// "sana ozel 479 TL'lik krem hediye" - bir gun once TAM FIYAT odemis adama.
+//
+// Yani sepetin kendi completed_at'ine bakmak YETMIYOR; o TELEFONDAN yakin
+// zamanda siparis gelip gelmedigine bakmak gerekiyor.
+//
+// Neden Shopify'a soruyoruz da Redis bayragi kullanmiyoruz: bayragi
+// siparis-kayit.js dusurse ancak BUGUNDEN SONRAKI siparisleri bilirdik,
+// Ibrahim gibi gecmiste siparis vermis olanlar bir ay boyunca acikta kalirdi.
+// Shopify'a sormak gecmise donuk de calisiyor.
+//
+// MALIYET: bu sorgu sadece gercekten mesaj gonderilecek bir aday varsa
+// yapiliyor (asamaBelirle'de en son kontrol). Cogu calismada aday olmadigi
+// icin hic Shopify istegi atilmiyor.
+const SIPARIS_GECMISI_GUN = 30;
+const SIPARIS_SAYFA_LIMITI = 8;          // 8 x 250 = 2000 siparis tavan
 
 // --- WhatsApp sablonlari ---
 const SEPET1_TEMPLATE = "sepet_hatirlatma";
@@ -163,6 +186,77 @@ async function fetchTerkEdilmisSepetler(saat) {
   return Array.isArray(data.checkouts) ? data.checkouts : [];
 }
 
+// Shopify sayfalama: "link" basligindaki rel="next" adresini cikar.
+// Ornek: <https://...orders.json?page_info=xyz>; rel="next"
+function sonrakiSayfaUrl(linkHeader) {
+  if (!linkHeader) return "";
+  const parcalar = String(linkHeader).split(",");
+  for (const p of parcalar) {
+    if (p.indexOf('rel="next"') !== -1) {
+      const m = p.match(/<([^>]+)>/);
+      if (m) return m[1];
+    }
+  }
+  return "";
+}
+
+// Son SIPARIS_GECMISI_GUN gunde siparis vermis TELEFONLARIN kumesi.
+//
+// Cache: Vercel ayni container'i tekrar kullanabildigi icin bu degisken
+// calismalar arasi hayatta kalabilir. Bayat veriyle karar vermemek icin
+// HER ISTEGIN BASINDA null'a cekiliyor (bkz. handleTest ve module.exports).
+// Boylece tek bir calisma icinde en fazla bir kez Shopify'a gidiliyor.
+//
+// Doner: Set  (basarili)  |  "HATA"  (Shopify'a ulasilamadi)
+let siparisTelefonCache = null;
+
+async function siparisVerenTelefonlar() {
+  if (siparisTelefonCache) return siparisTelefonCache;
+
+  try {
+    const kume = new Set();
+    const minDate = new Date(Date.now() - SIPARIS_GECMISI_GUN * 24 * 3600 * 1000).toISOString();
+    let url = `https://${process.env.SHOPIFY_STORE}/admin/api/${API_VERSION}/orders.json` +
+      `?status=any&limit=250&created_at_min=${encodeURIComponent(minDate)}` +
+      `&fields=id,name,phone,customer,shipping_address,billing_address`;
+
+    let sayfa = 0;
+    while (url && sayfa < SIPARIS_SAYFA_LIMITI) {
+      const r = await fetchWithTimeout(url, {
+        headers: {
+          "X-Shopify-Access-Token": process.env.SHOPIFY_TOKEN,
+          "Content-Type": "application/json"
+        }
+      }, 20000);
+      if (!r.ok) {
+        const govde = await r.text().catch(() => "");
+        throw new Error("orders.json HTTP " + r.status + " - " + govde.slice(0, 200));
+      }
+      const data = await r.json().catch(() => ({}));
+      const siparisler = Array.isArray(data.orders) ? data.orders : [];
+      for (const o of siparisler) {
+        const t = telefonCikar(o);   // siparislerde de ayni alanlar var
+        if (t) kume.add(t);
+      }
+      url = sonrakiSayfaUrl(r.headers.get("link"));
+      sayfa++;
+    }
+
+    console.log("SEPET-KURTARMA: son " + SIPARIS_GECMISI_GUN + " gunde siparis veren " +
+      kume.size + " telefon bulundu (" + sayfa + " sayfa)");
+    siparisTelefonCache = kume;
+    return kume;
+  } catch (e) {
+    // GUVENLI TARAF: siparis gecmisini okuyamadiysak mesaj GONDERME.
+    // Zaten almis birine "tamamla" / "sana hediye" yazmak, mesajin hic
+    // gitmemesinden cok daha kotu.
+    console.error("SEPET-KURTARMA: siparis gecmisi okunamadi (MESAJ GONDERILMIYOR):",
+      e && e.message ? e.message : e);
+    siparisTelefonCache = "HATA";
+    return "HATA";
+  }
+}
+
 // Sepetin kac saattir bekledigini hesapla
 function yasSaat(c) {
   const t = c.updated_at || c.created_at;
@@ -266,6 +360,20 @@ async function logSepetToSheets(asama, checkoutId, ad, telefon, tutar, durum) {
   }
 }
 
+// SON KONTROL: mesaj gonderilecek gibi gorunuyor - once bu numaradan yakin
+// zamanda siparis gelmis mi diye bak. Bilerek en sona birakildi: Shopify
+// siparis sorgusu sadece gercek bir aday varsa calissin.
+async function siparisKontroluGec(telefon, asama, sebep) {
+  const siparisliler = await siparisVerenTelefonlar();
+  if (siparisliler === "HATA") {
+    return { asama: 0, sebep: "siparis gecmisi okunamadi, guvenli taraf" };
+  }
+  if (siparisliler.has(telefon)) {
+    return { asama: 0, sebep: "bu numaradan son " + SIPARIS_GECMISI_GUN + " gunde siparis var" };
+  }
+  return { asama: asama, sebep: sebep };
+}
+
 // Bir sepet icin hangi asamada oldugumuzu belirle.
 // Doner: { asama: 0|1|2, sebep: "..." }
 //   0 -> simdilik bir sey yapma
@@ -294,7 +402,7 @@ async function asamaBelirle(c, telefon) {
   // hesaplayabilmek icin.
   const b1 = await degerOku(BAYRAK1 + c.id);
   if (!b1) {
-    return { asama: 1, sebep: yas.toFixed(1) + " saat oldu, hatirlatma" };
+    return await siparisKontroluGec(telefon, 1, yas.toFixed(1) + " saat oldu, hatirlatma");
   }
   if (b1 === "REDIS-HATASI") {
     return { asama: 0, sebep: "Redis okunamadi, guvenli taraf" };
@@ -304,7 +412,8 @@ async function asamaBelirle(c, telefon) {
   // MIN_MESAJ_ARALIGI_SAAT gecmis OLACAK.
   const gecenSaat = (Date.now() - Number(b1)) / 3600000;
   if (yas >= ASAMA2_SAAT && gecenSaat >= MIN_MESAJ_ARALIGI_SAAT) {
-    return { asama: 2, sebep: "1. mesajdan " + gecenSaat.toFixed(1) + " saat gecti, hediye" };
+    return await siparisKontroluGec(telefon, 2,
+      "1. mesajdan " + gecenSaat.toFixed(1) + " saat gecti, hediye");
   }
   if (yas < ASAMA2_SAAT) {
     return { asama: 0, sebep: "1. mesaj gitti, sepet " + yas.toFixed(1) + " saatlik (3 bekleniyor)" };
@@ -317,6 +426,7 @@ async function handleTest(req, res) {
   const secret = req.query && req.query.secret;
   if (secret !== SECRET) return res.status(401).send("Unauthorized");
 
+  siparisTelefonCache = null;   // bayat siparis listesiyle karar verme
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
 
   if (!process.env.SHOPIFY_STORE || !process.env.SHOPIFY_TOKEN) {
@@ -362,7 +472,10 @@ async function handleTest(req, res) {
     cikti += "  1) Telefonlar '90...' seklinde dolu mu? Bos geliyorsa Shopify kisisel veri erisimi sorunu var.\n";
     cikti += "  2) Kurtarma linkleri dolu mu?\n";
     cikti += "  3) Isimler dogru mu?\n";
-    cikti += "Ucu de tamamsa gercek moda gecebiliriz.\n";
+    cikti += "  4) KARAR satirinda 'siparis gecmisi okunamadi' yaziyorsa Shopify siparis\n";
+    cikti += "     sorgusu calismiyor demektir - o durumda hicbir mesaj GITMEZ. Bunu\n";
+    cikti += "     gorursen bana soyle.\n";
+    cikti += "Dordu de tamamsa gercek moda gecebiliriz.\n";
 
     return res.status(200).send(cikti);
   } catch (error) {
@@ -392,6 +505,8 @@ module.exports = async (req, res) => {
     console.error("SEPET-KURTARMA: SHOPIFY_STORE/SHOPIFY_TOKEN tanimli degil");
     return res.status(200).send("OK - shopify bilgisi yok");
   }
+
+  siparisTelefonCache = null;   // bayat siparis listesiyle karar verme
 
   try {
     const sepetler = await fetchTerkEdilmisSepetler(MAX_YAS_SAAT + 6);
