@@ -40,6 +40,13 @@ const API_VERSION = "2026-04";           // diger dosyalarla ayni
 const ASAMA1_SAAT = 1;                   // hatirlatma
 const ASAMA2_SAAT = 3;                   // hediye teklifi
 const MAX_YAS_SAAT = 24;                 // bundan eski sepetlere dokunma
+// 2026-09-18: HER SEPET IKI MESAJI DA ALIR. Ama sistem devreye girdiginde
+// zaten 3 saati gecmis sepetler var; onlara 1. mesaji gonderip 15 dakika
+// sonra 2. mesaji gondermek kotu bir deneyim olurdu. Bu yuzden 2. mesaj
+// hem "sepet 3 saati gecmis" hem de "1. mesajin uzerinden en az 2 saat
+// gecmis" sartini birlikte ariyor. Yeni bir sepette ikisi de dogal olarak
+// saglaniyor (1. saatte mesaj, 3. saatte ikincisi = 2 saat ara).
+const MIN_MESAJ_ARALIGI_SAAT = 2;
 
 // --- Guvenlik sinirlari ---
 const PARTI_LIMITI = 10;                 // tek calismada en fazla kac mesaj
@@ -229,11 +236,14 @@ async function sablonGonder(phone, templateName, lang, ad, link) {
   }
 }
 
-// Sepet mesajlarini eski BOTSohbet Sheets dosyasina yaz.
-// Apps Script'te "sepet_mesaji" dali YOKSA bu satir "Sayfa1"e duser -
-// bu yuzden SHEETS_SEPET_LOG kapali baslatildi. Apps Script'e dal
-// eklendiginde true yapilir.
-const SHEETS_SEPET_LOG = false;
+// Sepet mesajlarini eski BOTSohbet Sheets dosyasina yaz ("Sepet Kurtarma" sekmesi).
+// 2026-09-18: Apps Script'e type:"sepet_mesaji" dali eklendi ve deploy edildi,
+// bu yuzden acildi. Apps Script'te bu dal YOKSA satirlar "Sayfa1"e (musteri
+// konusmalari) coop olarak duser - o yuzden ikisi birlikte guncellenmeli.
+//
+// TEKRAR DENEME YOK (#12558 dersi): Apps Script cevabi bize ulasmasa bile
+// satiri cogu zaman ZATEN eklemis oluyor.
+const SHEETS_SEPET_LOG = true;
 async function logSepetToSheets(asama, checkoutId, ad, telefon, tutar, durum) {
   try {
     if (!SHEETS_SEPET_LOG) return;
@@ -277,20 +287,29 @@ async function asamaBelirle(c, telefon) {
   }
 
   const b2 = await bayrakVar(BAYRAK2 + c.id);
-  if (b2) return { asama: 0, sebep: "hediye mesaji zaten gonderilmis" };
+  if (b2) return { asama: 0, sebep: "iki mesaj da gonderilmis" };
 
-  // 2. ASAMA PENCERESI: 3 saati gectiyse artik hediye mesaji gider.
-  // Bayat bir sepete once "sepetinde urun var" deyip 15 dakika sonra hediye
-  // teklifi gondermek kotu bir deneyim; 3 saati gecmis sepete DOGRUDAN
-  // hediye mesaji gidiyor (daha guclu teklif zaten o).
-  if (yas >= ASAMA2_SAAT) {
-    return { asama: 2, sebep: yas.toFixed(1) + " saat oldu, hediye mesaji" };
+  // 1. ASAMA: 1 saati gecmis ve daha once hatirlatma gitmemis her sepet.
+  // BAYRAK1 icinde gonderim zamani (ms) tutuluyor - 2. mesajin araligini
+  // hesaplayabilmek icin.
+  const b1 = await degerOku(BAYRAK1 + c.id);
+  if (!b1) {
+    return { asama: 1, sebep: yas.toFixed(1) + " saat oldu, hatirlatma" };
+  }
+  if (b1 === "REDIS-HATASI") {
+    return { asama: 0, sebep: "Redis okunamadi, guvenli taraf" };
   }
 
-  // 1. ASAMA PENCERESI: sadece 1-3 saat arasi.
-  const b1 = await bayrakVar(BAYRAK1 + c.id);
-  if (b1) return { asama: 0, sebep: "1. mesaj gitti, 2. icin erken (" + yas.toFixed(1) + " saat)" };
-  return { asama: 1, sebep: yas.toFixed(1) + " saat oldu, hatirlatma" };
+  // 2. ASAMA: sepet 3 saati gecmis OLACAK ve 1. mesajin uzerinden en az
+  // MIN_MESAJ_ARALIGI_SAAT gecmis OLACAK.
+  const gecenSaat = (Date.now() - Number(b1)) / 3600000;
+  if (yas >= ASAMA2_SAAT && gecenSaat >= MIN_MESAJ_ARALIGI_SAAT) {
+    return { asama: 2, sebep: "1. mesajdan " + gecenSaat.toFixed(1) + " saat gecti, hediye" };
+  }
+  if (yas < ASAMA2_SAAT) {
+    return { asama: 0, sebep: "1. mesaj gitti, sepet " + yas.toFixed(1) + " saatlik (3 bekleniyor)" };
+  }
+  return { asama: 0, sebep: "1. mesajdan " + gecenSaat.toFixed(1) + " saat gecti (" + MIN_MESAJ_ARALIGI_SAAT + " bekleniyor)" };
 }
 
 // ============ TEST MODU (hicbir mesaj gondermez) ============
@@ -402,7 +421,8 @@ module.exports = async (req, res) => {
         const durum = await sablonGonder(telefon, SEPET1_TEMPLATE, SEPET1_LANG, ad, link);
         // Bayrak, gonderim basarisiz olsa da atiliyor: mukerrer pazarlama
         // mesaji riskini tekrar deneme kazancina tercih etmiyoruz.
-        await bayrakAt(BAYRAK1 + c.id, BAYRAK_OMRU);
+        // Zaman damgasi yaziliyor: 2. mesajin araligi buradan hesaplaniyor.
+        await degerYaz(BAYRAK1 + c.id, Date.now(), BAYRAK_OMRU);
         await degerYaz(TELEFON_KILIDI + telefon, c.id, TELEFON_OMRU);
         console.log("SEPET ASAMA-1 (" + c.id + " / " + telefon + "):", durum);
         await logSepetToSheets(1, c.id, ad, telefon, c.total_price, durum);
@@ -411,9 +431,6 @@ module.exports = async (req, res) => {
       } else if (asama === 2) {
         const durum = await sablonGonder(telefon, SEPET2_TEMPLATE, SEPET2_LANG, ad, link);
         await bayrakAt(BAYRAK2 + c.id, BAYRAK_OMRU);
-        // 1. asama bayragini da atiyoruz: dogrudan 2. asamaya atlanmis
-        // olabilir, geriye donup hatirlatma mesaji gitmesin.
-        await bayrakAt(BAYRAK1 + c.id, BAYRAK_OMRU);
         await degerYaz(TELEFON_KILIDI + telefon, c.id, TELEFON_OMRU);
         // Hediye sozu verildi: bu telefondan 48 saat icinde siparis gelirse
         // siparis-kayit.js Shopify'da siparisi "hediye-krem" diye etiketleyecek.
