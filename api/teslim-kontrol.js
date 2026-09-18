@@ -108,6 +108,23 @@ const TESLIMAT_GUNU_TEMPLATE = "teslimat_gunu_hatirlatma";
 const TESLIMAT_GUNU_LANG = "tr";
 const DAGITIMA_CIKTI_REASON_CODES = ["GOK"];
 
+// 2026-09-18 EKLENDI - TESLIMAT SONRASI REHBER MESAJI
+// Paket MUSTERIYE GERCEKTEN TESLIM EDILDIGI anda (gercekTeslim === true)
+// bir kereye mahsus "Boyun Sagligi Rehberi" linki gonderilir. Amac: cihazi
+// ilk gunden dogru kullandirmak (modlarin BIRLIKTE acilmasi, dogru baslangic
+// seviyeleri) - yanlis kullanim hem memnuniyetsizlik hem iade sebebi.
+//
+// TASARIM KARARI - FATURA AKISI KORUNUYOR: bu mesaj her iki cagri
+// noktasinda da triggerFatura()'dan SONRA gonderiliyor ve sendRehberMesajiGuvenli()
+// icinde try/catch ile sarili - WhatsApp tarafinda ne olursa olsun (token
+// hatasi, sablon reddi, zaman asimi) fatura kesme akisi ETKILENMEZ.
+//
+// MUKERRER KORUMASI: "rehber-gonderildi:<siparis no>" Redis bayragi (90 gun).
+// Bayrak, gonderim BASARISIZ olsa da atiliyor - bu bilincli bir tercih:
+// musteriye ayni mesajin iki kez gitmesi, hic gitmemesinden daha rahatsiz edici.
+const REHBER_TEMPLATE = "teslimat_rehber";
+const REHBER_LANG = "tr";
+
 // Arka plan/batch isi oldugu icin webhook-process.js'in musteri sohbeti
 // devre kesicisinden AYRI, kendi ortak anahtarini kullanir.
 const cb = yurtici.createCircuitBreaker("yurtici-cb");
@@ -282,6 +299,23 @@ async function alreadyNotifiedTeslimatGunu(orderNumber) {
 async function markNotifiedTeslimatGunu(orderNumber) {
   try {
     await redis.set("teslimat-gunu-bildirildi:" + orderNumber, "1", { ex: 30 * 24 * 3600 });
+  } catch (e) {}
+}
+
+// 2026-09-18: rehber mesaji da siparis basina SADECE BIR KEZ gitmeli.
+async function alreadySentRehber(orderNumber) {
+  try {
+    const v = await redis.get("rehber-gonderildi:" + orderNumber);
+    return !!v;
+  } catch (e) {
+    // Redis erisilemezse GUVENLI TARAF: mesaj GONDERME (teslimat gunu
+    // bayragiyla ayni gerekce - mukerrer mesaj musteriyi rahatsiz eder).
+    return true;
+  }
+}
+async function markSentRehber(orderNumber) {
+  try {
+    await redis.set("rehber-gonderildi:" + orderNumber, "1", { ex: 90 * 24 * 3600 });
   } catch (e) {}
 }
 
@@ -554,6 +588,73 @@ async function sendTeslimatGunuMesaji(phone, name, orderNumber) {
   } catch (e) {
     console.error("TESLIMAT GUNU HATA (" + orderNumber + "):", e && e.message ? e.message : e);
     await logTeslimatGunuToSheets(orderNumber, name, phone, "GITMEDI HATA: " + (e && e.message ? e.message : e));
+    return false;
+  }
+}
+
+// 2026-09-18: musteriye teslimat sonrasi rehber linki.
+// Sablon: "teslimat_rehber" (tr) - tek degisken: {{1}} = musteri adi.
+// Link sablonun ICINDE sabit metin olarak duruyor, parametre degil.
+async function sendRehberMesaji(phone, name, orderNumber) {
+  try {
+    const resp = await fetchWithTimeout(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "template",
+          template: {
+            name: REHBER_TEMPLATE,
+            language: { code: REHBER_LANG },
+            components: [
+              {
+                type: "body",
+                parameters: [
+                  { type: "text", text: temizleParam_(name, "değerli müşterimiz") }
+                ]
+              }
+            ]
+          }
+        })
+      },
+      12000
+    );
+    const data = await resp.json().catch(() => ({}));
+    const waStatus = readWaStatus(data);
+    console.log("REHBER MESAJI (" + orderNumber + "):", waStatus);
+    return true;
+  } catch (e) {
+    console.error("REHBER MESAJI HATA (" + orderNumber + "):", e && e.message ? e.message : e);
+    return false;
+  }
+}
+
+// Cagri noktalarindan kullanilan GUVENLI sarmalayici.
+// Telefon kontrolu + mukerrer kontrolu + gonderim + bayrak, hepsi burada.
+// HICBIR hata disari yayilmaz - fatura akisi bu fonksiyondan etkilenmez.
+async function sendRehberMesajiGuvenli(phone, name, orderNumber) {
+  try {
+    if (!phone) {
+      console.log("REHBER: telefon yok, gonderilemedi:", orderNumber);
+      return false;
+    }
+    if (await alreadySentRehber(orderNumber)) {
+      console.log("REHBER: zaten gonderilmis, atlandi:", orderNumber);
+      return false;
+    }
+    const sonuc = await sendRehberMesaji(phone, name, orderNumber);
+    // Gonderim basarisiz olsa da bayrak atiliyor - mukerrer mesaj riskini
+    // tekrar deneme kazancina tercih etmiyoruz (yukaridaki nota bakiniz).
+    await markSentRehber(orderNumber);
+    return sonuc;
+  } catch (e) {
+    console.error("REHBER: beklenmeyen hata (FATURA AKISI ETKILENMEDI):", orderNumber, e && e.message ? e.message : e);
     return false;
   }
 }
@@ -833,6 +934,15 @@ async function handleTarama(req, res) {
 
       if (detail && detail.gercekTeslim) {
         await triggerFatura(String(no));
+        // 2026-09-18: normal akis bu siparisi kacirdiysa rehber mesajini
+        // tarama gondersin. Redis bayragi ortak oldugu icin iki yoldan da
+        // tetiklense musteriye yalnizca BIR mesaj gider.
+        const rehberTelefon = normalizeTelefon(order.phone || (order.shipping_address && order.shipping_address.phone));
+        const rehberMusteriAdi =
+          (order.customer && ((order.customer.first_name || "") + " " + (order.customer.last_name || "")).trim()) ||
+          (order.shipping_address && order.shipping_address.name) ||
+          "";
+        await sendRehberMesajiGuvenli(rehberTelefon, rehberMusteriAdi, String(no));
         faturaSayisi++;
         detaylar.push(no + ":FATURA");
       } else if (detail && detail.sirketeIadeEdildi) {
@@ -957,6 +1067,11 @@ module.exports = async (req, res) => {
 
     if (detail && detail.gercekTeslim) {
       await triggerFatura(orderNumber);
+      // 2026-09-18: fatura tetiklendikten SONRA rehber linki. Bu cagri
+      // kendi icinde try/catch'li - patlasa bile yukaridaki fatura
+      // tetiklemesi zaten tamamlanmis durumda, akis bozulmaz.
+      const rehberAdi = (name && name !== "Merhaba") ? name : "";
+      await sendRehberMesajiGuvenli(phone, rehberAdi, orderNumber);
       return res.status(200).send("OK - teslim edildi, fatura tetiklendi");
     }
 
