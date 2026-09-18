@@ -438,7 +438,19 @@ async function handleTest(req, res) {
     let cikti = "=== TERK EDILMIS SEPETLER (TEST MODU - HICBIR MESAJ GONDERILMEDI) ===\n";
     cikti += "Shopify'dan donen kayit sayisi: " + sepetler.length + "\n";
     cikti += "Kurallar: " + ASAMA1_SAAT + ". saatte hatirlatma, " + ASAMA2_SAAT +
-      ". saatte hediye, " + MAX_YAS_SAAT + " saatten eskiye dokunulmaz\n\n";
+      ". saatte hediye, " + MAX_YAS_SAAT + " saatten eskiye dokunulmaz\n";
+
+    // Siparis gecmisi sorgusunu test modunda HER ZAMAN calistir. Gercek
+    // calismada bu sorgu sadece mesaj adayi varsa yapiliyor; ama burada
+    // amac "sorgu calisiyor mu" sorusunu sepetlerden bagimsiz cevaplamak.
+    const siparisliler = await siparisVerenTelefonlar();
+    if (siparisliler === "HATA") {
+      cikti += "SIPARIS GECMISI : >>> OKUNAMADI <<< - bu haldeyken HICBIR MESAJ GITMEZ.\n";
+      cikti += "                  Vercel loglarinda 'siparis gecmisi okunamadi' satirina bak.\n\n";
+    } else {
+      cikti += "Siparis gecmisi : son " + SIPARIS_GECMISI_GUN + " gunde siparis veren " +
+        siparisliler.size + " telefon bulundu - bu numaralara mesaj gitmez\n\n";
+    }
 
     if (sepetler.length === 0) {
       cikti += "Hic terk edilmis sepet yok.\n\n" +
@@ -472,9 +484,9 @@ async function handleTest(req, res) {
     cikti += "  1) Telefonlar '90...' seklinde dolu mu? Bos geliyorsa Shopify kisisel veri erisimi sorunu var.\n";
     cikti += "  2) Kurtarma linkleri dolu mu?\n";
     cikti += "  3) Isimler dogru mu?\n";
-    cikti += "  4) KARAR satirinda 'siparis gecmisi okunamadi' yaziyorsa Shopify siparis\n";
-    cikti += "     sorgusu calismiyor demektir - o durumda hicbir mesaj GITMEZ. Bunu\n";
-    cikti += "     gorursen bana soyle.\n";
+    cikti += "  4) Yukaridaki 'Siparis gecmisi' satirinda makul bir sayi var mi?\n";
+    cikti += "     '>>> OKUNAMADI <<<' yaziyorsa Shopify siparis sorgusu calismiyor\n";
+    cikti += "     demektir - o durumda hicbir mesaj GITMEZ.\n";
     cikti += "Dordu de tamamsa gercek moda gecebiliriz.\n";
 
     return res.status(200).send(cikti);
