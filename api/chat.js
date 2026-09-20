@@ -1,3 +1,27 @@
+// 2026-09-20 MALIYET DUZELTMESI (PROMPT ONBELLEKLEME):
+// Asagidaki sistem talimati ~20 bin karakter ve HER musteri mesajinda
+// bastan Anthropic'e gonderiliyordu. Gunde ~50 mesajla bu, faturanin
+// buyuk kismini olusturuyordu.
+// Artik talimat "cache_control" ile isaretli: Anthropic onu bir kez
+// okuyup 1 saat boyunca hafizasinda tutuyor, sonraki mesajlarda
+// onbellekten okuyor. Onbellekten okuma, bastan gondermenin ONDA BIRI
+// fiyatina geliyor.
+//
+// NEDEN 1 SAAT, 5 DAKIKA DEGIL: iki secenek var; 5 dakikalik onbellegin
+// yazma maliyeti 1,25 kat, 1 saatlik onbellegin 2 kat. Bizim trafigimizde
+// mesajlar arasi ortalama ~10 dakika var - 5 dakikalik onbellek her
+// seferinde kacirilir ve maliyeti DUSURMEK yerine ARTIRIRDI. 1 saatlik
+// onbellekte ise gun icindeki her okuma sureyi yeniliyor, yani mesai
+// boyunca canli kaliyor.
+//
+// DAVRANIS DEGISMEDI: bot ayni talimati, ayni sekilde kullaniyor.
+// Degisen tek sey, ayni metni tekrar tekrar gondermek yerine
+// Anthropic'in onu hatirlamasi. Musteri hicbir fark gormez.
+//
+// OLCUM: her cagrida "CHAT ONBELLEK:" satiri loglaniyor - Vercel
+// loglarindan onbellegin tutup tutmadigi gorulebiliyor.
+// okuma sayisi yuksek + yazma 0 ise onbellek calisiyor demektir.
+//
 // 2026-09-05 KRITIK DUZELTME: bu dosya Anthropic API'den gelen cevabin
 // basarili olup olmadigini HIC KONTROL ETMIYORDU - "response.ok" bakilmadan
 // direkt data.content okunuyordu. Anthropic tarafinda GECICI bir sorun
@@ -105,7 +129,10 @@ module.exports = async (req, res) => {
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: 400,
-        system: `
+        system: [
+          {
+            type: "text",
+            text: `
 Sen Masajur markasının resmi WhatsApp satış temsilcisisin. Müşterilerle WhatsApp üzerinden yazışıyorsun. Profesyonel, sıcak ve çözüm odaklı bir satış ve destek temsilcisisin; müşterinin sorununu anlar, doğru ürünü güvenle önerir ve satışı kapatmaya çalışırsın.
 ============================
 HİTAP ŞEKLİ (ÇOK ÖNEMLİ)
@@ -291,6 +318,9 @@ Müşteri satın almak istediğini belirtirse, onu doğal şekilde siparişe yö
 - Müşteriden WhatsApp üzerinden adres/kart bilgisi TOPLAMA. Onları yukarıdaki kanallara yönlendir.
 - Satışa doğal ve güven verici şekilde yaklaş, baskı yapma ama satışı da kaçırma; her fırsatta nazikçe siparişe davet et.
 `,
+            cache_control: { type: "ephemeral", ttl: "1h" }
+          }
+        ],
         messages: messages
       })
     });
@@ -301,6 +331,16 @@ Müşteri satın almak istediğini belirtirse, onu doğal şekilde siparişe yö
     }
 
     const data = await response.json();
+
+    // ONBELLEK OLCUMU: yazma=onbellege ilk kez yazilan, okuma=onbellekten
+    // ucuza okunan token sayisi. Okuma yuksekse onbellek calisiyor demektir.
+    const k = data.usage || {};
+    console.log("CHAT ONBELLEK:",
+      "yazma=" + (k.cache_creation_input_tokens || 0),
+      "okuma=" + (k.cache_read_input_tokens || 0),
+      "yeni-giris=" + (k.input_tokens || 0),
+      "cikis=" + (k.output_tokens || 0));
+
     const replyText = data.content?.[0]?.text;
 
     if (!replyText) {
