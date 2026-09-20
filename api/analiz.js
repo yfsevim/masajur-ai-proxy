@@ -117,12 +117,65 @@ async function konusmalariOku(tarih) {
   return veri.satirlar;
 }
 
+// "14:55" -> gece yarisindan beri gecen dakika. Okunamazsa null.
+function dakikaya(saat) {
+  const m = String(saat || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+// MUKERRER LOG SATIRLARINI ELE
+//
+// 2026-09-20, GERCEK OLAY: Sheets'te ayni musteri, ayni mesaj, ayni bot
+// cevabi 2-3 kez ust uste goruldu. Ilk bakista "bot kendini tekrar etmis"
+// gibi duruyordu ve analiz de oyle raporladi - AMA DOGRU DEGILDI.
+//
+// Kok sebep webhook-process.js'in logToSheets fonksiyonunda: Sheets'e yazma
+// 8 saniyede yanit alamazsa 1 saniye bekleyip tekrar deniyor (toplam 3 kez).
+// Apps Script satiri ASLINDA yaziyor, sadece cevabi yetistiremiyor - bu
+// yuzden her denemede bir satir daha dusuyor. Satirlar arasi fark tam
+// 9 saniye (8 zaman asimi + 1 bekleme) olmasinin sebebi bu.
+//
+// Musteriye mesaj TEK KEZ gidiyor (WhatsApp gonderimi loglamadan once ve
+// tekrarsiz). Yani sorun sadece kayitta; ama analiz bunu bilmezse her gun
+// "bot tekrar etti" diye SAHTE bulgu uretir ve gercek sorunlari golgeler.
+//
+// Cozum: ayni telefon + ayni mesaj + ayni cevap, 1 dakika icinde tekrar
+// ediyorsa tek sayilir. Musterinin gercekten iki kez yazdigi durumlarda
+// botun cevabi harfi harfine ayni olmayacagi icin bu kural onlari elemez.
+function mukerrerTemizle(satirlar) {
+  const sonGorulen = new Map();
+  const kalan = [];
+  let elenen = 0;
+
+  for (const s of satirlar) {
+    const anahtar = String(s.telefon || "") + "\u0000" +
+                    String(s.musteri || "") + "\u0000" +
+                    String(s.bot || "");
+    const dk = dakikaya(s.saat);
+    const onceki = sonGorulen.get(anahtar);
+
+    if (onceki != null && dk != null && dk - onceki >= 0 && dk - onceki <= 1) {
+      elenen++;
+      sonGorulen.set(anahtar, dk);   // zinciri takip et (9sn'lik tekrarlar dakika atlayabiliyor)
+      continue;
+    }
+    sonGorulen.set(anahtar, dk);
+    kalan.push(s);
+  }
+
+  return { satirlar: kalan, elenen: elenen };
+}
+
 // --- Satirlari telefona gore konusmalara grupla ---
-// Doner: { metin, konusmaSayisi, musteriSayisi, kesildi }
+// Doner: { metin, konusmaSayisi, musteriSayisi, kesildi, mukerrer }
 function konusmalariDuzenle(satirlar) {
-  const temiz = satirlar.filter(function (s) {
+  const hamTemiz = satirlar.filter(function (s) {
     return s && (s.musteri || s.bot);
   });
+
+  const ayiklanmis = mukerrerTemizle(hamTemiz);
+  const temiz = ayiklanmis.satirlar;
 
   let kesildi = false;
   let kullanilan = temiz;
@@ -157,7 +210,8 @@ function konusmalariDuzenle(satirlar) {
     metin: parcalar.join("\n"),
     konusmaSayisi: kullanilan.length,
     musteriSayisi: gruplar.size,
-    kesildi: kesildi
+    kesildi: kesildi,
+    mukerrer: ayiklanmis.elenen
   };
 }
 
@@ -359,6 +413,9 @@ async function handleTest(req, res) {
 
     c += "Okunan satir   : " + r.duzen.konusmaSayisi + "\n";
     c += "Farkli musteri : " + r.duzen.musteriSayisi + "\n";
+    if (r.duzen.mukerrer > 0) {
+      c += "Elenen mukerrer: " + r.duzen.mukerrer + " satir (Sheets log tekrari, analiz disi birakildi)\n";
+    }
     if (r.duzen.kesildi) {
       c += "UYARI: satir sayisi " + MAX_SATIR + " tavanini asti, en yeni " + MAX_SATIR + " satir analiz edildi.\n";
     }
@@ -470,7 +527,8 @@ module.exports = async (req, res) => {
 
     const ozet = tarih + ": " + r.duzen.konusmaSayisi + " satir, " +
       r.duzen.musteriSayisi + " musteri, " + s.sorunlar.length + " sorunlu cevap, " +
-      s.kizginMusteri + " kizgin, " + s.kacanSatis + " kacan satis";
+      s.kizginMusteri + " kizgin, " + s.kacanSatis + " kacan satis" +
+      (r.duzen.mukerrer > 0 ? ", " + r.duzen.mukerrer + " mukerrer log elendi" : "");
     console.log("ANALIZ OZET:", ozet, "| Sheets:", kayit,
       "| token:", s.girisToken + "/" + s.cikisToken);
 
