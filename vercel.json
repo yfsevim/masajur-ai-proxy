@@ -5,6 +5,7 @@
     "api/webhook-process.js": { "maxDuration": 90 },
     "api/yorum.js": { "maxDuration": 60 },
     "api/fatura-online.js": { "maxDuration": 70 },
-    "api/chat.js": { "maxDuration": 45 }
+    "api/chat.js": { "maxDuration": 45 },
+    "api/analiz.js": { "maxDuration": 180 }
   }
 }
