@@ -73,6 +73,11 @@ function tarihGecerliMi(s) {
   return /^\d{2}\.\d{2}\.\d{4}$/.test(String(s || ""));
 }
 
+// Sheets'in son cevabindaki tani bilgisi (test modunda gosteriliyor).
+// "Hic satir gelmedi" durumunda sebebini gormek icin: hangi sekme okundu,
+// kac satir var, tarih sutununda gercekte ne yaziyor.
+let sonTani = null;
+
 // --- Sheets'ten o gunun konusmalarini oku ---
 async function konusmalariOku(tarih) {
   if (!process.env.SHEETS_URL) throw new Error("SHEETS_URL tanimli degil");
@@ -93,7 +98,23 @@ async function konusmalariOku(tarih) {
   if (!veri || veri.ok !== true) {
     throw new Error("Sheets okuma basarisiz: " + metin.slice(0, 200));
   }
-  return Array.isArray(veri.satirlar) ? veri.satirlar : [];
+  // ESKI SURUM TUZAGI: Apps Script kaydedilmis ama YENI SURUM olarak
+  // dagitilmamissa, "konusma_oku" bilinmeyen bir tip sayilip en alttaki
+  // genel else'e duser: bize yine {"ok":true} doner ama "satirlar" YOKTUR
+  // (ve o istek Musteri Konusmalari sekmesine bir cop satir yazar).
+  // Bunu "o gun hic konusma olmamis" ile karistirmamak icin ayirt ediyoruz:
+  // satirlar alani YOKSA hata, BOS DIZI ise gercekten konusma yok demektir.
+  if (!Array.isArray(veri.satirlar)) {
+    throw new Error(
+      "Sheets cevabinda 'satirlar' alani yok - Apps Script'teki konusma_oku dali CALISMADI. " +
+      "Script kaydedilmis ama muhtemelen yeni surum olarak dagitilmamis " +
+      "(Dagit -> Dagitimlari yonet -> kalem -> Surum: Yeni surum -> Dagit). " +
+      "NOT: bu istek 'Musteri Konusmalari' sekmesine bos bir cop satir yazmis olabilir, silebilirsin. " +
+      "Gelen cevap: " + metin.slice(0, 150)
+    );
+  }
+  sonTani = veri.tani || null;
+  return veri.satirlar;
 }
 
 // --- Satirlari telefona gore konusmalara grupla ---
@@ -344,10 +365,28 @@ async function handleTest(req, res) {
 
     if (r.bos) {
       c += "\nBu tarihte hic konusma bulunamadi.\n\n";
-      c += "Olasi sebepler:\n";
-      c += "  - O gun gercekten hic mesaj gelmemis\n";
-      c += "  - Apps Script'teki konusma_oku dali tarihi farkli bicimde ariyor\n";
-      c += "    (Sheets'teki A sutunu 'gg.aa.yyyy ss:dd' biciminde olmali)\n";
+      if (sonTani) {
+        c += "--- TANI (Sheets ne gordu) ---\n";
+        c += "Okunan sekme   : " + sonTani.sekme + "\n";
+        c += "Sekmedeki satir: " + sonTani.sonSatir + "\n";
+        c += "Aranan gun     : " + tarih + "\n";
+        const ornekler = Array.isArray(sonTani.ornekler) ? sonTani.ornekler : [];
+        if (ornekler.length === 0) {
+          c += "Tarih ornegi   : (yok - sekme bos gorunuyor)\n";
+        } else {
+          c += "\nSon satirlarin TARIH sutununda gercekte ne var:\n";
+          ornekler.forEach(function (o, i) {
+            c += "  " + (i + 1) + ") tip=" + o.tip + "  ham='" + o.ham + "'\n";
+            c += "     cevrilmis='" + o.cevrilmis + "'  ->  gun='" + o.gun + "'\n";
+          });
+          c += "\nYukaridaki 'gun' degerlerinden biri aranan gune ('" + tarih + "') esit\n";
+          c += "olmaliydi. Degilse tarih bicimi farkli demektir - bu ciktiyi bana at.\n";
+        }
+      } else {
+        c += "Olasi sebepler:\n";
+        c += "  - O gun gercekten hic mesaj gelmemis\n";
+        c += "  - Apps Script guncel degil (tani bilgisi gelmedi)\n";
+      }
       return res.status(200).send(c);
     }
 
