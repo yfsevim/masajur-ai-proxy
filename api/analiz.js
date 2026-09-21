@@ -263,15 +263,44 @@ function konusmalariDuzenle(satirlar) {
 }
 
 // --- Claude'dan JSON sok: kod blogu/aciklama varsa temizle ---
+//
+// 2026-09-21, GERCEK OLAY: dort test calismasindan birinde "Unexpected
+// non-whitespace character after JSON at position 2817" hatasi alindi.
+// Claude JSON'u dogru yazmis ama SONUNA bir aciklama eklemis, o aciklamada
+// da "}" vardi. Eski yontem "ilk { ile SON } arasi" diye kestigi icin
+// o fazlaligi da JSON saniyordu.
+//
+// Artik parantezleri tek tek sayiyoruz ve ILK TAM JSON nesnesi kapaninca
+// duruyoruz; sonrasi yok sayiliyor. Tirnak icindeki { } isaretleri (orn.
+// musteri mesajinda gecen) sayilmiyor, kacis karakterleri (\") dogru
+// isleniyor.
 function jsonCikar(metin) {
-  let s = String(metin || "").trim();
-  s = s.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+  const s = String(metin || "");
   const bas = s.indexOf("{");
-  const son = s.lastIndexOf("}");
-  if (bas === -1 || son === -1 || son <= bas) {
+  if (bas === -1) {
     throw new Error("Cevapta JSON bulunamadi: " + s.slice(0, 200));
   }
-  return JSON.parse(s.slice(bas, son + 1));
+
+  let derinlik = 0;
+  let tirnakIcinde = false;
+  let kacis = false;
+
+  for (let i = bas; i < s.length; i++) {
+    const c = s[i];
+    if (tirnakIcinde) {
+      if (kacis) kacis = false;
+      else if (c === "\\") kacis = true;
+      else if (c === '"') tirnakIcinde = false;
+      continue;
+    }
+    if (c === '"') tirnakIcinde = true;
+    else if (c === "{") derinlik++;
+    else if (c === "}") {
+      derinlik--;
+      if (derinlik === 0) return JSON.parse(s.slice(bas, i + 1));
+    }
+  }
+  throw new Error("Cevaptaki JSON yarim kalmis (kapanmamis): " + s.slice(0, 200));
 }
 
 const ANALIZ_TALIMATI = `Sen Masajur'un WhatsApp satis botunu denetleyen bir kalite kontrol uzmanisin.
