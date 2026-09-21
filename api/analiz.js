@@ -78,21 +78,66 @@ function tarihGecerliMi(s) {
 // kac satir var, tarih sutununda gercekte ne yaziyor.
 let sonTani = null;
 
-// --- Sheets'ten o gunun konusmalarini oku ---
+// --- Sheets'ten o gunun konusmalarini oku (TEKRAR DENEMELI) ---
+//
+// 2026-09-21, GERCEK OLAY: ilk otomatik calismada (09:00:00) Apps Script
+// JSON yerine Google'in HTML hata sayfasini dondurdu. Ayni saniyede
+// sepet-kurtarma ve teslim-kontrol zamanlamalari da tetikleniyordu (hepsi
+// :00'da). Bizim Apps Script kodu her hatayi yakalayip JSON donduruyor;
+// HTML sayfasi geldiyse Google script'i HIC CALISTIRAMAMIS demektir -
+// gecici bir yuklenme.
+//
+// Bu projedeki "asla tekrar deneme" kurali (#12558) YAZMA islemleri icin:
+// tekrar yazmak mukerrer satir demek. OKUMA ise hicbir sey degistirmiyor,
+// tekrar denemenin yan etkisi yok. O yuzden burada guvenle tekrar deniyoruz.
+//
+// TEK ISTISNA: Apps Script ESKI SURUMDEYSE ("satirlar" alani yok) tekrar
+// DENEMIYORUZ - eski surumde bu istek genel else'e dusup "Musteri
+// Konusmalari"na cop satir yaziyor; her deneme bir cop satir daha demek.
+const OKUMA_DENEME = 3;
+const OKUMA_BEKLEME_MS = [0, 5000, 10000];   // 1. deneme hemen, sonra 5sn, sonra 10sn
+
+function bekle(ms) {
+  return new Promise(function (r) { setTimeout(r, ms); });
+}
+
 async function konusmalariOku(tarih) {
+  let sonHata = null;
+  for (let deneme = 1; deneme <= OKUMA_DENEME; deneme++) {
+    if (OKUMA_BEKLEME_MS[deneme - 1]) await bekle(OKUMA_BEKLEME_MS[deneme - 1]);
+    try {
+      const satirlar = await konusmalariOkuTekSefer(tarih);
+      if (deneme > 1) console.log("ANALIZ: okuma " + deneme + ". denemede basarili oldu");
+      return satirlar;
+    } catch (e) {
+      sonHata = e;
+      if (e && e.tekrarDenenmez) throw e;   // eski surum - cop satir riski
+      console.error("ANALIZ: okuma denemesi " + deneme + "/" + OKUMA_DENEME + " basarisiz:",
+        String(e && e.message ? e.message : e).slice(0, 150));
+    }
+  }
+  throw sonHata;
+}
+
+async function konusmalariOkuTekSefer(tarih) {
   if (!process.env.SHEETS_URL) throw new Error("SHEETS_URL tanimli degil");
   const r = await fetchWithTimeout(process.env.SHEETS_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type: "konusma_oku", tarih: tarih })
-  }, 30000);
+  }, 25000);
 
   const metin = await r.text().catch(() => "");
   let veri;
   try {
     veri = JSON.parse(metin);
   } catch (e) {
-    // Apps Script'te "konusma_oku" dali yoksa duz metin ("OK" gibi) doner.
+    // HTML geldiyse Google script'i calistiramamis (gecici yuklenme/kota) -
+    // bizim kodumuz degil. Duz metin geldiyse ("OK" gibi) Apps Script'te
+    // konusma_oku dali yok demektir.
+    if (/^\s*</.test(metin)) {
+      throw new Error("Google Apps Script gecici hata sayfasi dondurdu (HTML) - script calistirilamadi, tekrar denenecek");
+    }
     throw new Error("Sheets okuma cevabi JSON degil - Apps Script'e konusma_oku dali eklendi mi? Gelen: " + metin.slice(0, 200));
   }
   if (!veri || veri.ok !== true) {
@@ -105,13 +150,15 @@ async function konusmalariOku(tarih) {
   // Bunu "o gun hic konusma olmamis" ile karistirmamak icin ayirt ediyoruz:
   // satirlar alani YOKSA hata, BOS DIZI ise gercekten konusma yok demektir.
   if (!Array.isArray(veri.satirlar)) {
-    throw new Error(
+    const hata = new Error(
       "Sheets cevabinda 'satirlar' alani yok - Apps Script'teki konusma_oku dali CALISMADI. " +
       "Script kaydedilmis ama muhtemelen yeni surum olarak dagitilmamis " +
       "(Dagit -> Dagitimlari yonet -> kalem -> Surum: Yeni surum -> Dagit). " +
       "NOT: bu istek 'Musteri Konusmalari' sekmesine bos bir cop satir yazmis olabilir, silebilirsin. " +
       "Gelen cevap: " + metin.slice(0, 150)
     );
+    hata.tekrarDenenmez = true;   // her deneme bir cop satir daha yazardi
+    throw hata;
   }
   sonTani = veri.tani || null;
   return veri.satirlar;
