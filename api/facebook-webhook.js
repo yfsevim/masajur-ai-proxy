@@ -59,6 +59,20 @@
 // value.from.name, value.item, value.verb) seklinde gelir. Sadece
 // item==="comment" && verb==="add" olan degisiklikler yeni yorum sayilir;
 // digerleri (post paylasimi, yorum silme/duzenleme, begeni vb.) atlanir.
+// 2026-09-22 DUZELTME (URUN BILGISI EKSIKTI): satis talimatinda sadece
+// 3 ozellik (isi, titresim, EMS) yaziyordu; traksiyon (26° germe) ve
+// akupresur hic gecmiyordu. Musteri "akupresur var diyor" deyince bot
+// "bilgim yok" deyip telefona yonlendirdi. Artik "URUNUN 5 TERAPISI"
+// bolumu var: EMS, isi, masaj, traksiyon, akupresur + "akupunktur" sorulursa
+// "igneli yok, akupresur var" kurali. Kumanda adimlari DEGISMEDI.
+//
+// 2026-09-22 DUZELTME (YORUMA "DM'DEN ILETTIK" YAZIP DM GITMIYORDU): once
+// public cevap ("mesaj kutunuzu kontrol ediniz") yaziliyor, sonra DM
+// deneniyordu. DM basarisiz olunca musteri bos mesaj kutusu goruyordu.
+// Artik ONCE DM gonderiliyor, DM'in gercekten gidip gitmedigine gore public
+// cevap seciliyor. DM gitmezse Vercel loglarina "YORUM DM GONDERILEMEDI"
+// satiri dusuyor (asil hata, hemen ustundeki "mesaj gonderme hatasi"
+// satirinda).
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
 
@@ -281,6 +295,7 @@ Sen Masajur markasının resmi Facebook Sayfa yöneticisisin. Sayfa gönderileri
 - Masajur'un SADECE TEK BİR ürünü vardır: "Masajur Boyun Masaj Aleti". Farklı model, çeşit veya birden fazla cihaz YOKTUR.
 - ASLA "cihazlarımız", "ürünlerimiz", "modellerimiz", "boyun & omuz masaj cihazları" gibi ÇOĞUL veya birden fazla ürün/model varmış izlenimi veren ifadeler KULLANMA.
 - Her zaman TEKİL ve NET konuş: "Masajur cihazımız", "ürünümüz", "Masajur Boyun Masaj Aleti".
+- Masajur 15 dakikalık tek seansta 5 terapiyi aynı anda uygular: EMS (elektriksel kas uyarımı), ısı, masaj (titreşim), traksiyon (26° açılı formla boynu nazikçe esnetme) ve akupresür (yüzeydeki çıkıntılarla baskı noktaları). "Akupunktur" sorulursa: iğneli akupunktur yok, ama iğnesiz akupresür var. Bu 5 terapi dışında özellik uydurma; bu 5'inden biri sorulursa "bilgim yok" deme.
 ============================
 GÖREV
 ============================
@@ -294,7 +309,7 @@ UZUNLUK VE ÜSLUP
 - PUBLIC bir yorum cevabı yazıyorsun; KISA tut (1-3 cümle, en fazla 2-3 satır).
 - Markdown, yıldız, madde işareti KULLANMA. Düz metin yaz.
 - "Siz" diliyle, sıcak ve profesyonel bir tonla yaz.
-- İstersen sona "Detaylı bilgi için mesaj kutunuzu kontrol edebilirsiniz 📩" gibi DM'e yönlendiren kısa bir cümle ekleyebilirsin, zorunlu değil.
+- Kişiye özel mesaj (DM) gidip gitmediği aşağıda "DM DURUMU" olarak ayrıca belirtilecek; DM ile ilgili cümleni SADECE ona göre kur.
 - Doğal yerlerde emoji kullanabilirsin, abartma.
 ============================
 YASAKLAR
@@ -306,12 +321,19 @@ YASAKLAR
 `;
 
 const PUBLIC_YORUM_AI_FALLBACK = "Merhaba 😊 Yorumunuz için teşekkür ederiz! Sorularınız için mesaj kutunuzu kontrol edebilirsiniz 📩";
+// 2026-09-22: DM GONDERILEMEDIGINDE kullanilacak metinler. Bunlar "mesaj
+// kutunuzu kontrol edin" DEMEZ - bunun yerine musteriyi bize yazmaya davet eder.
+const PUBLIC_YORUM_AI_FALLBACK_DM_YOK = "Merhaba 😊 Yorumunuz için teşekkür ederiz! Detaylı bilgi için bize mesaj atabilirsiniz 📩";
+const PUBLIC_FIYAT_SIPARIS_DM_YOK = "Merhaba 😊 Güncel fiyat ve kampanya bilgilerine profilimizdeki bağlantıdan ulaşabilirsiniz 🌐 Aklınıza takılan her şey için bize mesaj atabilirsiniz 📩";
+
+const DM_DURUMU_GITTI = "\n============================\nDM DURUMU\n============================\nBu kişiye AYRICA özel mesaj (DM) gönderildi. İstersen cevabın sonuna \"Detaylı bilgi için mesaj kutunuzu kontrol edebilirsiniz 📩\" gibi kısa bir cümle ekleyebilirsin, zorunlu değil.";
+const DM_DURUMU_GITMEDI = "\n============================\nDM DURUMU (ÇOK ÖNEMLİ)\n============================\nBu kişiye özel mesaj (DM) GÖNDERİLEMEDİ. \"Mesaj kutunuzu kontrol edin\", \"size mesaj gönderdik\", \"DM'den ilettik\" gibi ifadeleri ASLA KULLANMA - müşteri boş mesaj kutusu görür ve güveni sarsılır. Bunun yerine detaylı bilgi için bize mesaj atabileceğini söyle.";
 
 // Yorum metnini Claude'a gonderip o yoruma OZEL, kisa bir public cevap
 // urettirir. Hata olursa (API sorunu vb.) null doner - cagiran yerde
 // PUBLIC_YORUM_AI_FALLBACK'e dusulur, boylece yoruma HICBIR cevap
 // yazilmadan kalinmaz.
-async function yorumaPublicAICevapUret(yorumMetni) {
+async function yorumaPublicAICevapUret(yorumMetni, dmGitti) {
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -323,7 +345,7 @@ async function yorumaPublicAICevapUret(yorumMetni) {
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: 200,
-        system: PUBLIC_YORUM_AI_PROMPT,
+        system: PUBLIC_YORUM_AI_PROMPT + (dmGitti ? DM_DURUMU_GITTI : DM_DURUMU_GITMEDI),
         messages: [{ role: "user", content: String(yorumMetni || "Güzel görünüyor.") }]
       })
     });
@@ -440,6 +462,21 @@ SOSYAL MEDYA (VERİ UYDURMA YASAĞI)
 ============================
 - Facebook Sayfamız: facebook.com/Masajur. Müşteri Facebook sayfamızın adresini sorarsa SADECE bunu ver. Başka bir adres ASLA UYDURMA.
 ============================
+ÜRÜNÜN 5 TERAPİSİ (ÇOK ÖNEMLİ - ÖZELLİK SORULARINDA SADECE BU BİLGİYİ KULLAN)
+============================
+Masajur, 15 dakikalık tek bir seansta 5 terapiyi aynı anda uygular:
+1. EMS (elektriksel kas uyarımı): Kasları hafif elektriksel uyarımla çalıştırır, gevşemeyi ve kan dolaşımını destekler. Kumandadaki EMS tuşuyla açılır (6 seviye).
+2. Isı: Boyun bölgesini ısıtarak kasların yumuşamasını ve kan dolaşımının artmasını destekler. Kumandadaki ISI tuşuyla açılır (3 seviye).
+3. Masaj (titreşim): Kas dokusunu nazikçe uyararak gün içinde biriken gerginliği azaltır. Kumandadaki TİTREŞİM tuşuyla açılır (3 seviye).
+4. Traksiyon (germe/esneme): Cihazın 26° açılı ergonomik formu sayesinde, boyun cihaza yerleştirildiğinde başın kendi ağırlığıyla boyun nazikçe esnetilir. Boynun doğal kavisini destekler. Ayrı bir tuşu yoktur; cihaza uzandığınız anda çalışır.
+5. Akupresür: Cihazın yüzeyindeki çıkıntılar ve noktalar, boyun ve ense bölgesindeki noktalara baskı uygular. Ayrı bir tuşu yoktur; cihaza uzandığınız anda çalışır.
+KURALLAR:
+- "Akupunktur" sorulursa: iğneli akupunktur YOKTUR, ama aynı noktalara iğnesiz baskı uygulayan AKUPRESÜR VARDIR. Müşteri büyük ihtimalle bunu soruyordur; asla sadece "yok" deyip geçme, akupresürü anlat.
+- "Akupresür", "traksiyon", "germe", "esneme", "çekme" sorulursa: VAR de ve yukarıdaki açıklamayı kullan.
+- Bu 5 terapi dışında bir özellik (ör. manyetik terapi, kızılötesi, telefon uygulaması, Bluetooth) sorulursa VAR deme, uydurma. "Masajur'da EMS, ısı, masaj, traksiyon ve akupresür bulunuyor" diyerek net cevap ver.
+- Bu 5 terapiden biri sorulduğunda ASLA "bu konuda bilgim yok", "detaylı bilgim bulunmuyor" deme ve müşteriyi bu yüzden telefona yönlendirme. Bu bilgiler kesindir, güvenle anlat.
+- Kumandada sadece 3 tuş (TİTREŞİM, ISI, EMS) vardır; traksiyon ve akupresür cihazın yapısından gelir. Kumanda sorulursa aşağıdaki KUMANDA KULLANIMI bölümünü kullan.
+============================
 KUMANDA KULLANIMI (ÇOK ÖNEMLİ - "NASIL KULLANIRIM" / "KUMANDA ÇALIŞMIYOR" SORULARINDA KULLAN)
 ============================
 Müşteri kumandayla/cihazla ilgili herhangi bir şey sorarsa (nasıl kullanılır, çalışmıyor, tepki vermiyor, nasıl açılır, nasıl çalıştırırım vb.) — konuşmanın önceki turlarında bu konudan bahsetmiş olsan BİLE — aşağıdaki adımların HEPSİNİ, HİÇBİRİNİ ATLAMADAN ve HER SEFERİNDE eksiksiz tekrar et. Sadece bir kısmını verip diğerini sonraki mesaja bırakmak YASAK; "önce şunu deneyin" deyip devamını esirgemek de YASAK. Kendi cümlelerinle, kısa ve akıcı şekilde, ama adımların tamamını mutlaka içerecek şekilde, sırasıyla anlat:
@@ -456,10 +493,10 @@ Bu adımları vermeden telefon numarasına yönlendirme ve hiçbirini "zaten sö
 ============================
 İLK KARŞILAMA / GENEL BİLGİ (ÇOK ÖNEMLİ - RAHATSIZLIK ODAKLI)
 ============================
-Müşteri "bilgi almak istiyorum", "ürün hakkında bilgi", "Masajur nedir" gibi GENEL bir giriş yaptığında, ürünü teknik özelliklerle (ısı, titreşim, EMS) anlatarak BAŞLAMA. Bunun yerine, Masajur'un HANGİ RAHATSIZLIKLARA iyi geldiğini öne çıkar. Çünkü müşterilerimiz tam da bu dertlerden dolayı satın alıyor; bu rahatsızlıkları duyunca "benim derdim bu" diyip ilgileniyorlar.
+Müşteri "bilgi almak istiyorum", "ürün hakkında bilgi", "Masajur nedir" gibi GENEL bir giriş yaptığında, ürünü teknik özelliklerle (EMS, ısı, masaj, traksiyon, akupresür) anlatarak BAŞLAMA. Bunun yerine, Masajur'un HANGİ RAHATSIZLIKLARA iyi geldiğini öne çıkar. Çünkü müşterilerimiz tam da bu dertlerden dolayı satın alıyor; bu rahatsızlıkları duyunca "benim derdim bu" diyip ilgileniyorlar.
 - Şu rahatsızlıkları MUTLAKA ve HER GENEL BİLGİ cevabında say: boyun fıtığı, boyun düzleşmesi, kas ağrıları, koldaki uyuşma, omuz ağrıları.
 - Örnek açılış: "Merhaba, hoş geldiniz 🙂 Masajur özellikle boyun fıtığı, boyun düzleşmesi, kas ağrıları, omuz ağrıları ve kollardaki uyuşma gibi şikayetler için tasarlandı. Bu sorunları yaşayan binlerce müşterimiz düzenli kullanımda ciddi rahatlama yaşadı. Sizin de bu tarz bir şikayetiniz var mı? Size en doğru şekilde yardımcı olayım 🙂"
-- Açılışta müşteriye şikayetini sor ki sohbeti satışa taşıyabilesin. Teknik özellikleri (ısı, titreşim, EMS) ancak müşteri detay sorarsa anlat.
+- Açılışta müşteriye şikayetini sor ki sohbeti satışa taşıyabilesin. Teknik özellikleri (5 terapi: EMS, ısı, masaj, traksiyon, akupresür) ancak müşteri detay sorarsa anlat.
 - Bu rahatsızlık vurgusunu sadece ilk karşılamada değil, ürünü tanıttığın her fırsatta yap.
 - Fiyat: 5.699 TL (bu fiyat dışında fiyat söyleme)
 - Şarjlı ve kablosuz kullanım imkanı sunar.
@@ -472,6 +509,8 @@ Müşteri "bilgi almak istiyorum", "ürün hakkında bilgi", "Masajur nedir" gib
 - Isı özelliği: Boyun bölgesini ısıtarak kasların yumuşamasını ve kan dolaşımının artmasını destekler, bu da gerginliğin azalmasına yardımcı olur.
 - Titreşim: Kas dokusunu nazikçe uyararak gevşemeyi destekler, gün içinde biriken gerginliği azaltmaya yardımcı olur.
 - EMS (elektriksel kas uyarımı): Kasları hafif uyararak gevşemesini destekler ve boyun bölgesinde konfor sağlar.
+- Traksiyon (26° germe): Boynu nazikçe esneterek doğal kavisini destekler, sıkışma hissini azaltmaya yardımcı olur.
+- Akupresür: Yüzeydeki çıkıntılar boyun ve ense noktalarına baskı uygulayarak rahatlamayı destekler.
 - Kablosuz/şarjlı kullanım: Evde, ofiste veya araçta dilediğiniz yerde rahatça kullanabilmenizi sağlar.
 - Visco yastık: Boynu ergonomik şekilde destekleyerek doğru duruşa ve rahatlamaya yardımcı olur.
 SADECE MASAJUR: Sen yalnızca Masajur Boyun Masaj Aleti'ni temsil ediyorsun. Başka bir ürün sorulursa: "Bu konuda 0553 068 16 19 veya 0551 148 53 44 numaralı hatlarımızdan detaylı bilgi alabilirsiniz." de. Olmayan ürün/özellik uydurma.
@@ -713,27 +752,42 @@ module.exports = async (req, res) => {
             continue;
           }
 
-          // OLUMLU/NOTR ise eskisi gibi devam:
-          // 1) Yorumun ALTINA public cevap: fiyat/nasil alinir/siparis gibi
-          // bir sey soruyorsa SIRAYLA (rotasyon) hazir FIYAT_SIPARIS
-          // grubundan; degilse Claude'a o yoruma OZEL bir cevap urettirilir
-          // (yorumaPublicAICevapUret) - AI hata verirse sabit
-          // PUBLIC_YORUM_AI_FALLBACK metni kullanilir.
-          const publicYanitMetni = yorumFiyatSiparisSoruyorMu(yorumMetni)
-            ? await siradakiFiyatSiparisYanitiniGetir()
-            : (await yorumaPublicAICevapUret(yorumMetni)) || PUBLIC_YORUM_AI_FALLBACK;
-          await yorumaPublicYanitVer(yorumId, publicYanitMetni);
-
-          // 2) Yorumu yapan kisiye OZEL mesaj (DM) - Claude'dan satis odakli,
+          // OLUMLU/NOTR ise:
+          // 2026-09-22 SIRA DEGISTI: ONCE ozel mesaj (DM), SONRA public cevap.
+          // Eskiden once public cevap ("mesaj kutunuzu kontrol ediniz") yaziliyor,
+          // sonra DM deneniyordu - DM basarisiz olunca musteri bos mesaj kutusu
+          // goruyordu. Artik public cevap, DM'in GERCEKTEN gidip gitmedigine gore
+          // secilir.
+          //
+          // 1) Yorumu yapan kisiye OZEL mesaj (DM) - Claude'dan satis odakli,
           // kisisel cevap. Bu, o kisinin normal DM hafizasina da ekleniyor;
           // boylece daha sonra normal DM'den yazarsa bot bu ilk temasi hatirlar.
+          let dmGitti = false;
           const dmCevap = await kullaniciyaCevapUret(
             yorumYapanId,
             yorumMetni || "Merhaba, ürün hakkında bilgi almak istiyorum."
           );
           if (dmCevap) {
-            await facebookMesajGonder({ comment_id: yorumId }, dmCevap);
+            const dmSonuc = await facebookMesajGonder({ comment_id: yorumId }, dmCevap);
+            dmGitti = !!(dmSonuc && !dmSonuc.error && dmSonuc.message_id);
           }
+          if (!dmGitti) {
+            console.error("FB WEBHOOK: YORUM DM GONDERILEMEDI -", yorumEtiketi, "yorumId:", yorumId, "cevapUretildi:", !!dmCevap);
+          }
+
+          // 2) Yorumun ALTINA public cevap. DM gittiyse eskisi gibi ("mesaj
+          // kutunuzu kontrol edin" iceren) metinler; gitmediyse bu ifadeyi
+          // ICERMEYEN metinler kullanilir.
+          let publicYanitMetni;
+          if (yorumFiyatSiparisSoruyorMu(yorumMetni)) {
+            publicYanitMetni = dmGitti
+              ? await siradakiFiyatSiparisYanitiniGetir()
+              : PUBLIC_FIYAT_SIPARIS_DM_YOK;
+          } else {
+            publicYanitMetni = (await yorumaPublicAICevapUret(yorumMetni, dmGitti))
+              || (dmGitti ? PUBLIC_YORUM_AI_FALLBACK : PUBLIC_YORUM_AI_FALLBACK_DM_YOK);
+          }
+          await yorumaPublicYanitVer(yorumId, publicYanitMetni);
         } catch (e) {
           console.error("FB WEBHOOK: yorum isleme hatasi:", e && e.message ? e.message : e);
         }
