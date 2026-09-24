@@ -590,7 +590,13 @@ async function kullaniciyaCevapUret(psid, kullaniciMesaji) {
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
       max_tokens: 400,
-      system: SATIS_PROMPT,
+      system: [
+        {
+          type: "text",
+          text: SATIS_PROMPT,
+          cache_control: { type: "ephemeral" }
+        }
+      ],
       messages: messages
     })
   });
