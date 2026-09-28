@@ -574,12 +574,79 @@ Müşteri satın almak istediğini belirtirse, onu doğal şekilde siparişe yö
 
 // Kullanicinin (Facebook mesaj gonderen/yorum sahibi PSID) gecmisini cekip
 // Claude'a gonderir, cevabi hafizaya ekleyip kaydeder ve cevap metnini dondurur.
+
+// ============================================================
+// 2026-09-28 MALIYET DUZELTMESI (IKINCI ONBELLEK NOKTASI)
+// ============================================================
+// Sistem talimati zaten onbellege aliniyordu (bkz. system: cache_control).
+// Ama KONUSMA GECMISI onbellege girmiyordu: 20 mesajlik bir sohbette
+// 20. mesajda onceki 19 mesaj her seferinde bastan, tam ucretle
+// isleniyordu.
+//
+// Cozum: gecmisin SON mesajina ikinci bir onbellek isareti koyuyoruz.
+// Boylece bir sonraki musteri mesajinda "sistem talimati + o ana kadarki
+// tum gecmis" onbellekten okunuyor - okuma, bastan gondermenin ONDA BIRI
+// fiyatina geliyor.
+//
+// NEDEN messages.length - 2: dizinin sonundaki eleman YENI gelen musteri
+// mesaji; onu isaretlemek ise yaramaz cunku bir sonraki cagrida dizi
+// zaten degismis olacak. Bir onceki eleman (son bot cevabi) isaretlenince,
+// sonraki cagrida o nokta "degismeyen onek"in tam sinirinda kaliyor ve
+// onbellek tutuyor.
+//
+// DAVRANIS DEGISMEDI: metnin kendisi aynen gidiyor, sadece duz string
+// yerine tek elemanli blok formatina cevriliyor (cache_control sadece
+// bloklara takilabiliyor). Model ayni girdiyi goruyor, musteri hicbir
+// fark gormez.
+//
+// Anthropic en fazla 4 onbellek noktasina izin veriyor; biz 2 kullaniyoruz.
+function gecmiseOnbellekIsaretiKoy(messages) {
+  if (!Array.isArray(messages) || messages.length < 2) return messages;
+
+  // Once varsa eski isaretleri temizle: Anthropic en fazla 4 onbellek
+  // noktasina izin veriyor, yanlislikla birikmesini engelliyoruz.
+  for (let j = 0; j < messages.length; j++) {
+    const mm = messages[j];
+    if (mm && Array.isArray(mm.content)) {
+      mm.content.forEach(function (b) { if (b) delete b.cache_control; });
+    }
+  }
+
+  const i = messages.length - 2;
+  const m = messages[i];
+  if (!m) return messages;
+
+  // Icerik duz string olabilir de, blok dizisi de olabilir - ikisini de destekle.
+  let metin = "";
+  if (typeof m.content === "string") {
+    metin = m.content;
+  } else if (Array.isArray(m.content)) {
+    metin = m.content.map(function (b) { return (b && b.text) || ""; }).join("");
+  }
+  if (!metin) return messages;
+
+  messages[i] = {
+    role: m.role,
+    content: [
+      {
+        type: "text",
+        text: metin,
+        cache_control: { type: "ephemeral", ttl: "1h" }
+      }
+    ]
+  };
+  return messages;
+}
+
 async function kullaniciyaCevapUret(psid, kullaniciMesaji) {
   const history = await getHistory(psid);
 
   const messages = [];
   history.forEach((m) => messages.push({ role: m.role, content: m.content }));
   messages.push({ role: "user", content: kullaniciMesaji });
+
+  // IKINCI ONBELLEK NOKTASI: gecmisin son mesajini isaretle (bkz. yukarisi)
+  gecmiseOnbellekIsaretiKoy(messages);
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -595,7 +662,7 @@ async function kullaniciyaCevapUret(psid, kullaniciMesaji) {
         {
           type: "text",
           text: SATIS_PROMPT,
-          cache_control: { type: "ephemeral" }
+          cache_control: { type: "ephemeral", ttl: "1h" }
         }
       ],
       messages: messages
@@ -609,6 +676,15 @@ async function kullaniciyaCevapUret(psid, kullaniciMesaji) {
   }
 
   const data = await response.json();
+
+  // ONBELLEK OLCUMU: okuma yuksek + yazma dusukse onbellek calisiyor demektir.
+  const k = data.usage || {};
+  console.log("FB DM ONBELLEK:",
+    "yazma=" + (k.cache_creation_input_tokens || 0),
+    "okuma=" + (k.cache_read_input_tokens || 0),
+    "yeni-giris=" + (k.input_tokens || 0),
+    "cikis=" + (k.output_tokens || 0));
+
   const cevap = data.content?.[0]?.text || null;
 
   if (cevap) {
