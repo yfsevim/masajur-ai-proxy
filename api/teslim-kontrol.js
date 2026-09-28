@@ -46,10 +46,56 @@ const redis = Redis.fromEnv();
 const yurtici = require("../lib/yurtici");
 
 const SECRET = "masajur_yakkoholding_2128";
-const RECHECK_DELAY = "1h";       // 6h -> 1h: teslimat tespiti cok daha hizli olsun
+
+// ============================================================
+// 2026-09-28 KOTA OPTIMIZASYONU
+// ============================================================
+// SORUN: her siparis SAATTE BIR sorgulaniyordu (RECHECK_DELAY="1h", 96 deneme).
+// Buna 30 dakikada bir calisan tarama eklenince aylik 22.187 proxy istegi
+// oluyordu - QuotaGuard'in 20.000 limitini asip hesabi askiya aldirdi ve
+// fatura kesme akisi GUNLERCE sessizce durdu.
+//
+// COZUM - ucu birden:
+//   1) KADEMELI ARALIK: kargo 1-3 gunde teslim ediliyor; ilk gun 4 saatte bir,
+//      sonrasinda 8 saatte bir yetiyor. Paket kuryeye zimmetlenince (GOK)
+//      SAATTE BIR'e geciliyor - yani teslimat aninda hala hizliyiz, bos
+//      bekleme saatlerinde degiliz.
+//   2) GECE DURAKLAMASI: 00:00-08:00 arasinda Yurtici'ye hic gidilmiyor,
+//      sadece sabaha yeniden zamanlaniyor. Gece teslimat olmuyor.
+//   3) DUVAR SAATI SINIRI: eski "96 deneme" sayaci artik anlamsiz (araliklar
+//      degisken). Yerine ILK kontrolden itibaren 6 GUN sinir kondu; sipariste
+//      "ilk" alani QStash govdesinde tasiniyor.
+const RECHECK_DAGITIMDA = "1h";   // paket kuryede - teslim her an olabilir
+const RECHECK_ILK_GUN   = "4h";   // ilk 24 saat
+const RECHECK_SONRASI   = "8h";   // 2. gunden itibaren
+const TAKIP_SINIRI_GUN  = 6;      // bu sureden sonra alarm, fatura kesilmez
+
+// Istanbul saati (Vercel UTC calisir, Turkiye UTC+3 - yaz saati uygulamasi yok)
+function istanbulSaati() {
+  return (new Date().getUTCHours() + 3) % 24;
+}
+function geceMi() {
+  const h = istanbulSaati();
+  return h >= 0 && h < 8;
+}
+// Gece ise sabah 08:00'e kadar kalan saat, degilse null
+function sabahaKalanSaat() {
+  const h = istanbulSaati();
+  if (h >= 8) return null;
+  return Math.max(1, 8 - h);
+}
+function recheckGecikmesi(deneme, dagitimda) {
+  const gece = sabahaKalanSaat();
+  if (gece !== null) return gece + "h";   // once sabahi bekle
+  if (dagitimda) return RECHECK_DAGITIMDA;
+  if (deneme <= 6) return RECHECK_ILK_GUN;
+  return RECHECK_SONRASI;
+}
+
+const RECHECK_DELAY = RECHECK_ILK_GUN;  // geriye donuk uyumluluk (kullanilmiyor)
 // fatura-baslat.js ilk kontrolu 1 gun sonra baslatiyor. Buradan itibaren
 // 1 saatte bir kontrol edilirse 96 deneme = 4 gun -> toplam ~5 gun (oncekiyle ayni sinir).
-const MAX_DENEME = 96;
+const MAX_DENEME = 200;   // 2026-09-28: artik ASIL sinir TAKIP_SINIRI_GUN (duvar saati); bu sadece sonsuz dongu koruyucusu
 // NOT: Bu sinira ulasilirsa fatura KESILMEZ. Sadece Google Sheets'e alarm
 // kaydi dusulur, sen Mysoft panelinden manuel kontrol edip karar verirsin.
 // Sadece gercekten "teslim edildi" (DLV) onayi gelen siparislere fatura kesilir.
@@ -232,21 +278,30 @@ async function getKargoDetail(orderNumber) {
 }
 
 // Bir sonraki kontrolu QStash'e birak
-async function scheduleRecheck(orderNumber, deneme, phone, name) {
+async function scheduleRecheck(orderNumber, deneme, phone, name, ilk, dagitimda) {
   if (!process.env.QSTASH_TOKEN) {
     console.log("QSTASH_TOKEN yok, tekrar deneme birakilamadi");
     return;
   }
+  const gecikme = recheckGecikmesi(deneme, !!dagitimda);
   const targetUrl = "https://masajur-ai-proxy.vercel.app/api/teslim-kontrol?secret=" + SECRET;
   await fetch("https://qstash.upstash.io/v2/publish/" + targetUrl, {
     method: "POST",
     headers: {
       Authorization: "Bearer " + process.env.QSTASH_TOKEN,
       "Content-Type": "application/json",
-      "Upstash-Delay": RECHECK_DELAY
+      "Upstash-Delay": gecikme
     },
-    body: JSON.stringify({ orderNumber: orderNumber, deneme: deneme + 1, phone: phone, name: name })
+    body: JSON.stringify({
+      orderNumber: orderNumber,
+      deneme: deneme + 1,
+      phone: phone,
+      name: name,
+      ilk: ilk || new Date().toISOString()
+    })
   });
+  console.log("TESLIM-KONTROL: " + orderNumber + " icin sonraki kontrol " + gecikme + " sonra" +
+    (dagitimda ? " (paket dagitimda)" : ""));
 }
 
 // Teslim edildi -> fatura-kes.js'i tetikle
@@ -891,6 +946,23 @@ async function handleTarama(req, res) {
   }
 
   try {
+    // 2026-09-28: tarama QStash'te 30 dakikada bir zamanlanmis durumda ve her
+    // calismada 5 siparis sorguluyordu - gunde ~240 proxy istegi. Zamanlamayi
+    // Upstash panelinden degistirmek yerine kodun kendisi kisitliyor: son
+    // calismadan 55 dakika gecmediyse hicbir sorgu yapmadan cikiyor.
+    // Boylece panelde ayar degistirmeye gerek kalmadan siklik yariya iniyor.
+    try {
+      const sonCalisma = await redis.get("tarama-son-calisma");
+      if (sonCalisma && (Date.now() - Number(sonCalisma)) < 55 * 60 * 1000) {
+        const kalanDk = Math.ceil((55 * 60 * 1000 - (Date.now() - Number(sonCalisma))) / 60000);
+        console.log("TARAMA: son calismadan 55 dk gecmedi, atlandi (" + kalanDk + " dk kaldi)");
+        return res.status(200).send("OK - cok erken, atlandi");
+      }
+      await redis.set("tarama-son-calisma", String(Date.now()), { ex: 6 * 3600 });
+    } catch (e) {
+      console.error("TARAMA: siklik kontrolu yapilamadi, devam ediliyor:", e && e.message ? e.message : e);
+    }
+
     const simdi = Date.now();
     const tumSiparisler = await fetchTumSiparisler(TARAMA_LOOKBACK_DAYS);
 
@@ -1074,6 +1146,9 @@ module.exports = async (req, res) => {
     const deneme = body.deneme || 1;
     const phone = body.phone ? String(body.phone) : "";
     const name = body.name ? String(body.name) : "Merhaba";
+    // 2026-09-28: takibin NE ZAMAN basladigi. Eski gorevlerde bu alan yok -
+    // o zaman "simdi" kabul ediyoruz, boylece gecise sorunsuz uyum saglaniyor.
+    const ilk = body.ilk ? String(body.ilk) : new Date().toISOString();
 
     if (!orderNumber) {
       // Normalde hic olmamasi gereken bir durum (fatura-baslat.js ve QStash
@@ -1087,6 +1162,24 @@ module.exports = async (req, res) => {
     }
 
     console.log("TESLIM-KONTROL:", orderNumber, "deneme:", deneme);
+
+    // 2026-09-28 DUVAR SAATI SINIRI: 6 gun gecmisse artik sorgulama, alarm dusur.
+    // (Eski "96 deneme" sayaci degisken araliklarla anlamsizlasti.)
+    const gecenGun = (Date.now() - new Date(ilk).getTime()) / 86400000;
+    if (isFinite(gecenGun) && gecenGun >= TAKIP_SINIRI_GUN) {
+      console.error("TESLIM-KONTROL: " + TAKIP_SINIRI_GUN + " gun doldu, takip birakiliyor:", orderNumber);
+      await logTeslimAlarmToSheets(orderNumber, deneme,
+        TAKIP_SINIRI_GUN + " GUN GECTI - TESLIM ONAYLANAMADI - FATURA KESILMEDI - MANUEL KONTROL GEREKLI");
+      return res.status(200).send("OK - " + TAKIP_SINIRI_GUN + " gun asildi, alarm kaydedildi, fatura kesilmedi");
+    }
+
+    // 2026-09-28 GECE DURAKLAMASI: 00:00-08:00 arasi kargo hareketi olmuyor.
+    // Yurtici'ye HIC gitmeden sabaha yeniden zamanliyoruz - proxy kotasi yanmiyor.
+    if (geceMi()) {
+      console.log("TESLIM-KONTROL: gece saati (" + istanbulSaati() + ":00 Istanbul), sorgu yapilmadi, sabaha ertelendi:", orderNumber);
+      await scheduleRecheck(orderNumber, deneme, phone, name, ilk, false);
+      return res.status(200).send("OK - gece saati, sabaha ertelendi");
+    }
 
     const detail = await getKargoDetail(orderNumber);
     console.log("TESLIM-KONTROL DURUM:", orderNumber, "->", JSON.stringify(detail));
@@ -1143,12 +1236,15 @@ module.exports = async (req, res) => {
     }
 
     if (deneme >= MAX_DENEME) {
-      console.error("TESLIM-KONTROL: max deneme asildi (5 gun), siparis:", orderNumber);
+      console.error("TESLIM-KONTROL: max deneme asildi (sonsuz dongu koruyucusu), siparis:", orderNumber);
       await logTeslimAlarmToSheets(orderNumber, deneme);
-      return res.status(200).send("OK - 5 gun asildi, alarm kaydedildi, fatura kesilmedi");
+      return res.status(200).send("OK - deneme siniri asildi, alarm kaydedildi, fatura kesilmedi");
     }
 
-    await scheduleRecheck(orderNumber, deneme, phone, name);
+    // Paket kuryeye zimmetlenmisse (GOK) bir sonraki kontrol SAATTE BIR,
+    // degilse kademeli aralik (ilk gun 4h, sonrasi 8h).
+    const dagitimda = !!(detail && detail.reasonId && DAGITIMA_CIKTI_REASON_CODES.includes(detail.reasonId));
+    await scheduleRecheck(orderNumber, deneme, phone, name, ilk, dagitimda);
     return res.status(200).send("OK - henuz teslim edilmedi, tekrar zamanlandi");
   } catch (error) {
     console.error("TESLIM-KONTROL HATA:", error && error.message ? error.message : error);
@@ -1159,12 +1255,14 @@ module.exports = async (req, res) => {
       const deneme = body.deneme || 1;
       const phone = body.phone ? String(body.phone) : "";
       const name = body.name ? String(body.name) : "Merhaba";
+      const ilk = body.ilk ? String(body.ilk) : new Date().toISOString();
       if (body.orderNumber) {
-        if (deneme >= MAX_DENEME) {
-          console.error("TESLIM-KONTROL: max deneme asildi (hata yolunda), siparis:", body.orderNumber);
+        const gecen = (Date.now() - new Date(ilk).getTime()) / 86400000;
+        if (deneme >= MAX_DENEME || (isFinite(gecen) && gecen >= TAKIP_SINIRI_GUN)) {
+          console.error("TESLIM-KONTROL: sinir asildi (hata yolunda), siparis:", body.orderNumber);
           await logTeslimAlarmToSheets(String(body.orderNumber), deneme);
         } else {
-          await scheduleRecheck(String(body.orderNumber), deneme, phone, name);
+          await scheduleRecheck(String(body.orderNumber), deneme, phone, name, ilk, false);
         }
       }
     } catch (e2) {}
