@@ -77,6 +77,70 @@
 // kutuda kagit fatura anlamina GELMEDIGI acikca belirtiliyor.
 // Ayrica IADE KARGO UCRETI bolumu eklendi (arizali = biz karsilariz,
 // saglam urun iadesi = musteri karsilar).
+
+// ============================================================
+// 2026-09-28 MALIYET DUZELTMESI (IKINCI ONBELLEK NOKTASI)
+// ============================================================
+// Sistem talimati zaten onbellege aliniyordu (bkz. system: cache_control).
+// Ama KONUSMA GECMISI onbellege girmiyordu: 20 mesajlik bir sohbette
+// 20. mesajda onceki 19 mesaj her seferinde bastan, tam ucretle
+// isleniyordu.
+//
+// Cozum: gecmisin SON mesajina ikinci bir onbellek isareti koyuyoruz.
+// Boylece bir sonraki musteri mesajinda "sistem talimati + o ana kadarki
+// tum gecmis" onbellekten okunuyor - okuma, bastan gondermenin ONDA BIRI
+// fiyatina geliyor.
+//
+// NEDEN messages.length - 2: dizinin sonundaki eleman YENI gelen musteri
+// mesaji; onu isaretlemek ise yaramaz cunku bir sonraki cagrida dizi
+// zaten degismis olacak. Bir onceki eleman (son bot cevabi) isaretlenince,
+// sonraki cagrida o nokta "degismeyen onek"in tam sinirinda kaliyor ve
+// onbellek tutuyor.
+//
+// DAVRANIS DEGISMEDI: metnin kendisi aynen gidiyor, sadece duz string
+// yerine tek elemanli blok formatina cevriliyor (cache_control sadece
+// bloklara takilabiliyor). Model ayni girdiyi goruyor, musteri hicbir
+// fark gormez.
+//
+// Anthropic en fazla 4 onbellek noktasina izin veriyor; biz 2 kullaniyoruz.
+function gecmiseOnbellekIsaretiKoy(messages) {
+  if (!Array.isArray(messages) || messages.length < 2) return messages;
+
+  // Once varsa eski isaretleri temizle: Anthropic en fazla 4 onbellek
+  // noktasina izin veriyor, yanlislikla birikmesini engelliyoruz.
+  for (let j = 0; j < messages.length; j++) {
+    const mm = messages[j];
+    if (mm && Array.isArray(mm.content)) {
+      mm.content.forEach(function (b) { if (b) delete b.cache_control; });
+    }
+  }
+
+  const i = messages.length - 2;
+  const m = messages[i];
+  if (!m) return messages;
+
+  // Icerik duz string olabilir de, blok dizisi de olabilir - ikisini de destekle.
+  let metin = "";
+  if (typeof m.content === "string") {
+    metin = m.content;
+  } else if (Array.isArray(m.content)) {
+    metin = m.content.map(function (b) { return (b && b.text) || ""; }).join("");
+  }
+  if (!metin) return messages;
+
+  messages[i] = {
+    role: m.role,
+    content: [
+      {
+        type: "text",
+        text: metin,
+        cache_control: { type: "ephemeral", ttl: "1h" }
+      }
+    ]
+  };
+  return messages;
+}
+
 const SECRET = "masajur_yakkoholding_2128";
 const ALLOWED_WEBSITE_ORIGINS = [
   "https://masajur.com",
@@ -126,6 +190,10 @@ module.exports = async (req, res) => {
         content: message
       });
     }
+
+    // IKINCI ONBELLEK NOKTASI: gecmisin son mesajini isaretle (bkz. dosya basi)
+    gecmiseOnbellekIsaretiKoy(messages);
+
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
