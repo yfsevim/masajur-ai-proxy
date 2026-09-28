@@ -172,7 +172,18 @@ async function handleDebugKargo(req, res) {
     return res.status(400).send("orderNumber parametresi gerekli, orn: ?mod=debug-kargo&orderNumber=12415&secret=...");
   }
   try {
-    const raw = await yurtici.queryShipment(String(orderNumber), cb, "DEBUG-KARGO");
+    // 2026-09-28: debug ucu artik DEVRE KESICIYI ATLIYOR. Eskiden normal "cb"
+    // kullaniyordu; devre kesici acikken (5 basarisiz sorgudan sonra 10 dakika
+    // boyunca) sorgu Yurtici'ye HIC gitmiyor, ekranda sadece "SONUC YOK"
+    // yaziyordu - yani tam da teshis koymak istedigimiz anda teshis
+    // yapamiyorduk. Bu sahte devre kesici hep "kapali" der ve basari/basarisizlik
+    // sayacini DA kirletmez, boylece debug cagrisi gercek akisi etkilemez.
+    const debugCb = {
+      isOpen: async function () { return false; },
+      recordFailure: async function () {},
+      recordSuccess: async function () {}
+    };
+    const raw = await yurtici.queryShipment(String(orderNumber), debugCb, "DEBUG-KARGO");
     if (!raw) {
       return res.status(200).send("SONUC YOK (devre kesici acik olabilir veya sorgu basarisiz oldu) - siparis: " + orderNumber);
     }
@@ -1032,6 +1043,21 @@ module.exports = async (req, res) => {
 
   if (req.method === "GET" && req.query && req.query.mod === "debug-kargo") {
     return handleDebugKargo(req, res);
+  }
+
+  // 2026-09-28: devre kesiciyi elle kapatma ucu. Yurtici tarafindaki sorun
+  // duzeldikten sonra 10 dakika beklemeden akisi yeniden acmak icin.
+  if (req.method === "GET" && req.query && req.query.mod === "devre-sifirla") {
+    if ((req.query && req.query.secret) !== SECRET) return res.status(401).send("Unauthorized");
+    try {
+      await redis.del("yurtici-cb:open-until");
+      await redis.del("yurtici-cb:fails");
+      await redis.del("yurtici-cb-canli:open-until");
+      await redis.del("yurtici-cb-canli:fails");
+      return res.status(200).send("OK - devre kesici sifirlandi (yurtici-cb ve yurtici-cb-canli)");
+    } catch (e) {
+      return res.status(200).send("HATA: " + (e && e.message ? e.message : e));
+    }
   }
 
   if (req.method !== "POST") return res.status(200).send("OK");
