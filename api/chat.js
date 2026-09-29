@@ -154,6 +154,234 @@ function istekKendiSitemizdenMi(req) {
   });
 }
 
+// ============================================================
+// SIPARIS YAKALAMA VE BILDIRIM (2026-09-29 EKLENDI)
+// ------------------------------------------------------------
+// Bot, musteri siparisi onayladiginda cevabinin sonuna
+//   ##SIPARIS##{...json...}##SON##
+// satirini ekliyor. Burada o satiri yakaliyor, musteriye giden
+// metinden SILIYORUZ, sonra isletmeye WhatsApp bildirimi
+// gonderip Google Sheets'e satir yaziyoruz.
+//
+// GEREKLI ENV DEGISKENLERI (Vercel > Settings > Environment Variables):
+//   SIPARIS_BILDIRIM_NUMARALARI = 905530681619,905511485344
+//        (bildirimin gidecegi kendi numaralariniz, virgulle, basinda 90)
+//   SIPARIS_TEMPLATE            = temsilci_bildirim  (Instagram botunun kullandigi
+//                                 ONAYLI sablon - yeni sablon olusturmaya gerek yok)
+//   SIPARIS_TEMPLATE_LANG       = tr                (opsiyonel, varsayilan tr)
+//   SIPARIS_TEMPLATE_PARAM      = 2                 (opsiyonel, varsayilan 2)
+//        2 = temsilci_bildirim gibi iki parametreli sablon: {{1}} kaynak, {{2}} ozet
+//        5 = ileride yeni_siparis gibi bes parametreli bir sablon acarsaniz:
+//            {{1}} ad, {{2}} telefon, {{3}} adres, {{4}} eposta, {{5}} kanal
+// Zaten var olanlar kullanilir: WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, SHEETS_URL
+//
+// NEDEN SABLON (TEMPLATE) GEREKIYOR:
+// WhatsApp Business API'de bir numaraya serbest metin gonderebilmek icin
+// o numaranin son 24 saat icinde size yazmis olmasi gerekir. Musteri bota
+// yazdigi icin MUSTERIYE serbest cevap verilebiliyor; ama bildirim KENDI
+// numaramiza gidiyor ve o numara bota yazmadigi icin serbest metin
+// CALISMAZ. Bu yuzden onayli sablon kullaniyoruz.
+// Instagram botunda zaten onayli olan "temsilci_bildirim" sablonu
+// kullanilabilir (2 parametre: kaynak + ozet). Sablon gonderimi
+// basarisiz olursa serbest metne duselir, o da olmazsa Sheets kaydi
+// her halukarda yazilir - siparis kaybolmaz.
+// ============================================================
+
+const SIPARIS_RE = /##SIPARIS##\s*([\s\S]*?)\s*##SON##/;
+
+function tekSatir(d) {
+  return String(d === null || d === undefined ? "" : d).replace(/\s+/g, " ").trim();
+}
+
+// Cevaptan siparis isaretini ayikla ve musteriye gidecek temiz metni dondur
+function siparisAyikla(metin) {
+  const ham = String(metin || "");
+  const m = ham.match(SIPARIS_RE);
+  let siparis = null;
+  if (m) {
+    try {
+      siparis = JSON.parse(m[1]);
+    } catch (e) {
+      // JSON bozuk olsa bile siparisi KAYBETME: ham metni not olarak gecir,
+      // isletme elle okuyup girsin. Sessizce dusurmek gercek para kaybi olur.
+      console.error("CHAT SIPARIS: JSON cozulemedi, ham metinle bildirilecek:", String(m[1]).slice(0, 300));
+      siparis = { ad: "", telefon: "", adres: "", eposta: "",
+                  not: "BOZUK KAYIT - ELLE KONTROL EDIN: " + String(m[1]).slice(0, 600) };
+    }
+  }
+  let temiz = ham.replace(SIPARIS_RE, "");
+  // yarim kalmis / bozuk isaret kalintilarini da temizle - musteri ASLA gormemeli
+  temiz = temiz.replace(/##SIPARIS##[\s\S]*$/, "");
+  temiz = temiz.replace(/##SON##/g, "");
+  temiz = temiz.replace(/\n{3,}/g, "\n\n").trim();
+  return { temiz: temiz, siparis: siparis };
+}
+
+async function zamanAsimliFetch(url, opts, ms) {
+  const kontrol = new AbortController();
+  const sayac = setTimeout(function () { kontrol.abort(); }, ms || 12000);
+  try {
+    const cfg = Object.assign({}, opts || {}, { signal: kontrol.signal });
+    return await fetch(url, cfg);
+  } finally {
+    clearTimeout(sayac);
+  }
+}
+
+function bildirimNumaralari() {
+  return String(process.env.SIPARIS_BILDIRIM_NUMARALARI || "")
+    .split(",")
+    .map(function (n) { return n.replace(/[^0-9]/g, "").trim(); })
+    .filter(function (n) { return n.length >= 10; });
+}
+
+// Sablon parametreleri. temsilci_bildirim gibi 2 parametreli sablonlar icin
+// tek satirlik ozet uretir. WhatsApp sablon parametrelerinde SATIR SONU
+// KABUL EDILMEZ - o yuzden her sey " · " ile tek satira diziliyor.
+function sablonParametreleri(s) {
+  const adet = String(process.env.SIPARIS_TEMPLATE_PARAM || "2").trim();
+  if (adet === "5") {
+    return [
+      { type: "text", text: tekSatir(s.ad) || "-" },
+      { type: "text", text: tekSatir(s.telefon) || "-" },
+      { type: "text", text: (tekSatir(s.adres) || "-").slice(0, 900) },
+      { type: "text", text: tekSatir(s.eposta) || "yok" },
+      { type: "text", text: tekSatir(s.kanal) || "WhatsApp" }
+    ];
+  }
+  const parcalar = [
+    tekSatir(s.ad) || "-",
+    tekSatir(s.telefon) || "-",
+    tekSatir(s.adres) || "-",
+    tekSatir(s.eposta) ? "e-posta: " + tekSatir(s.eposta) : "e-posta yok",
+    "kapida odeme"
+  ];
+  if (tekSatir(s.not)) parcalar.push("not: " + tekSatir(s.not));
+  return [
+    { type: "text", text: "YENI SIPARIS - " + (tekSatir(s.kanal) || "WhatsApp") },
+    { type: "text", text: parcalar.join(" \u00b7 ").slice(0, 900) }
+  ];
+}
+
+async function waSablonGonder(numara, s) {
+  const sablon = process.env.SIPARIS_TEMPLATE;
+  if (!sablon) return { ok: false, sebep: "sablon-tanimsiz" };
+  const resp = await zamanAsimliFetch(
+    "https://graph.facebook.com/v23.0/" + process.env.WHATSAPP_PHONE_NUMBER_ID + "/messages",
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + process.env.WHATSAPP_TOKEN,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: numara,
+        type: "template",
+        template: {
+          name: sablon,
+          language: { code: process.env.SIPARIS_TEMPLATE_LANG || "tr" },
+          components: [
+            {
+              type: "body",
+              parameters: sablonParametreleri(s)
+            }
+          ]
+        }
+      })
+    },
+    12000
+  );
+  const govde = await resp.text().catch(function () { return ""; });
+  return { ok: resp.ok, sebep: resp.ok ? "sablon" : "sablon-hata " + resp.status + " " + govde.slice(0, 200) };
+}
+
+async function waMetinGonder(numara, metin) {
+  const resp = await zamanAsimliFetch(
+    "https://graph.facebook.com/v23.0/" + process.env.WHATSAPP_PHONE_NUMBER_ID + "/messages",
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + process.env.WHATSAPP_TOKEN,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: numara,
+        type: "text",
+        text: { preview_url: false, body: metin }
+      })
+    },
+    12000
+  );
+  const govde = await resp.text().catch(function () { return ""; });
+  return { ok: resp.ok, sebep: resp.ok ? "metin" : "metin-hata " + resp.status + " " + govde.slice(0, 200) };
+}
+
+function siparisMetni(s) {
+  const satirlar = [
+    "YENI SIPARIS ALINDI",
+    "",
+    "Ad Soyad: " + (tekSatir(s.ad) || "-"),
+    "Telefon: " + (tekSatir(s.telefon) || "-"),
+    "Adres: " + (tekSatir(s.adres) || "-"),
+    "E-posta: " + (tekSatir(s.eposta) || "yok"),
+    "Odeme: Kapida odeme",
+    "Kanal: " + (tekSatir(s.kanal) || "WhatsApp")
+  ];
+  if (tekSatir(s.not)) satirlar.push("Not: " + tekSatir(s.not));
+  return satirlar.join("\n");
+}
+
+async function siparisSheetsLogla(s, durum) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    await zamanAsimliFetch(process.env.SHEETS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "siparis",
+        ad: tekSatir(s.ad),
+        telefon: tekSatir(s.telefon),
+        adres: tekSatir(s.adres),
+        eposta: tekSatir(s.eposta),
+        not: tekSatir(s.not),
+        kanal: tekSatir(s.kanal),
+        durum: String(durum || "")
+      })
+    }, 12000);
+  } catch (e) {
+    console.error("CHAT SIPARIS: Sheets log HATA:", e && e.message ? e.message : e);
+  }
+}
+
+// Isletmeye bildir. Once sablon, olmazsa serbest metin. Her ihtimalde Sheets'e yazar.
+async function siparisBildir(s) {
+  const numaralar = bildirimNumaralari();
+  const sonuclar = [];
+  if (!numaralar.length) {
+    console.error("CHAT SIPARIS: SIPARIS_BILDIRIM_NUMARALARI tanimsiz - WhatsApp bildirimi gonderilmedi");
+    sonuclar.push("numara-yok");
+  }
+  const metin = siparisMetni(s);
+  for (let k = 0; k < numaralar.length; k++) {
+    const numara = numaralar[k];
+    let sonuc = { ok: false, sebep: "-" };
+    try {
+      sonuc = await waSablonGonder(numara, s);
+      if (!sonuc.ok) {
+        const yedek = await waMetinGonder(numara, metin);
+        sonuc = { ok: yedek.ok, sebep: sonuc.sebep + " | " + yedek.sebep };
+      }
+    } catch (e) {
+      sonuc = { ok: false, sebep: "istisna " + (e && e.message ? e.message : e) };
+    }
+    console.log("CHAT SIPARIS BILDIRIM:", numara, sonuc.ok ? "OK" : "BASARISIZ", sonuc.sebep);
+    sonuclar.push(numara + "=" + (sonuc.ok ? "OK" : "HATA"));
+  }
+  await siparisSheetsLogla(s, sonuclar.join(" "));
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -203,7 +431,7 @@ module.exports = async (req, res) => {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: 400,
+        max_tokens: 700,
         system: [
           {
             type: "text",
@@ -402,14 +630,48 @@ GÜVEN & FİRMA BİLGİLERİ
 - "İşe yarar mı / gerçek mi" derse: ürünün ne işe yaradığını sakin ve net anlat, 14 gün iade + deneme imkanını güvence olarak sun.
 - Kızgın/şikayetçi müşteriye: önce sakin ve anlayışlı yaklaş, çözüm odaklı ol, gerekirse 0553 068 16 19 veya 0551 148 53 44 numaralarına yönlendir.
 ============================
-SİPARİŞ KAPATMA (ÇOK ÖNEMLİ)
+SİPARİŞ ALMA (ÇOK ÖNEMLİ - SİPARİŞİ SEN ALIRSIN)
 ============================
-Müşteri satın almak istediğini belirtirse, onu doğal şekilde siparişe yönlendir. İki seçeneği birlikte sun:
-1) Web sitesinden: "https://masajur.com/products/masajur™-boyun-masaj-aleti-visco-yastik-hediye linkinden hemen sipariş verebilirsiniz."
-2) Telefonla: "Dilerseniz 0553 068 16 19 veya 0551 148 53 44 numaralarından da siparişinizi verebilirsiniz."
-- Web sitesi: https://masajur.com
-- Müşteriden WhatsApp üzerinden adres/kart bilgisi TOPLAMA. Onları yukarıdaki kanallara yönlendir.
+Müşteri sipariş vermek istediğini belirtirse ("sipariş vermek istiyorum", "almak istiyorum", "nasıl alabilirim", "istiyorum" vb.) onu BAŞKA BİR YERE YÖNLENDİRME. Siparişi doğrudan sen alırsın. Web sitesine veya telefona yönlendirmek SATIŞ KAÇIRMAKTIR.
+AKIŞ:
+1) Önce onayla ve rahatlat. Örnek: "Tabii, siparişinizi hemen buradan alabilirim 🙂 Kapıda ödeme ile gönderiyoruz."
+2) Bilgileri TEK MESAJDA, kısa ve nazik bir liste hâlinde iste:
+Sipariş için şu bilgileri yazmanız yeterli:
+Ad Soyad
+Telefon
+Açık adres (il, ilçe, mahalle, sokak, no, daire)
+E-posta (varsa, fatura için)
+3) Müşteri bilgileri eksik gönderirse SADECE eksik olanı nazikçe iste. Zaten verdiği bilgiyi tekrar sorma.
+4) E-posta ZORUNLU DEĞİL. Müşteri vermek istemezse ısrar etme, "tabii, e-posta olmadan da devam edebiliriz" de ve geç.
+5) Bilgiler tamamlandığında özet çıkar ve AÇIK ONAY iste:
+Siparişinizi özetliyorum:
+Ad Soyad: ...
+Telefon: ...
+Adres: ...
+E-posta: ...
+Ürün: Masajur Boyun Masaj Aleti (visco yastık hediyeli)
+Ödeme: Kapıda ödeme
+Onaylıyor musunuz?
+6) Müşteri onay verirse ("evet", "onaylıyorum", "tamam", "olur" vb.) siparişi kaydet (aşağıdaki SİPARİŞ KAYIT İŞARETİ kuralına bak) ve şunu söyle: "Siparişiniz alındı 🙂 En kısa sürede hazırlayıp kargoya veriyoruz. Kargoya verildiğinde buradan bilgilendireceğim."
+KURALLAR:
+- Kredi kartı / banka kartı bilgisi ASLA İSTEME. Ödeme kapıda, teslimatta yapılır.
+- Müşteri özeti onaylamadan siparişi kaydetme.
+- Adresi eksik verirse (sadece il/ilçe gibi) mahalle, sokak, bina no ve daire no isteyerek tamamlat. Kargo için tam adres şart.
+- Telefon numarasını 05XX XXX XX XX formatında al. Eksik veya hatalıysa nazikçe tekrar iste.
+- Müşteri illa web sitesinden almak isterse o zaman linki ver: https://masajur.com/products/masajur™-boyun-masaj-aleti-visco-yastik-hediye
+- Telefonla sipariş vermek isterse: 0553 068 16 19 veya 0551 148 53 44.
+- Bilgi toplarken robotik olma; tek tek sorgu çeker gibi değil, doğal bir satış temsilcisi gibi yaz.
 - Satışa doğal ve güven verici şekilde yaklaş, baskı yapma ama satışı da kaçırma; her fırsatta nazikçe siparişe davet et.
+============================
+SİPARİŞ KAYIT İŞARETİ (SİSTEM - MÜŞTERİYE ASLA GÖSTERME)
+============================
+Müşteri sipariş özetini AÇIKÇA ONAYLADIĞINDA, o cevabının EN SONUNA, ayrı bir satır olarak tam olarak şu biçimde bir satır ekle:
+##SIPARIS##{"ad":"Ad Soyad","telefon":"05xxxxxxxxx","adres":"tam adres tek satır hâlinde","eposta":"","not":""}##SON##
+- Bu satır sadece sistem içindir. Sistem onu otomatik siler, müşteri görmez. Bu satır hakkında ASLA yorum yapma, müşteriye bahsetme, "kaydettim" gibi teknik şeyler yazma.
+- SADECE müşteri onay verdiğinde ve SADECE BİR KEZ ekle. Bilgi toplarken, özet gösterirken veya onay beklerken EKLEME.
+- JSON geçerli olmalı: çift tırnak kullan, satır sonu koyma, adresin tamamını tek satıra yaz.
+- eposta ve not alanları boşsa "" olarak bırak, alanı silme.
+- Bilgilerden herhangi biri eksikse işareti EKLEME; önce eksiği tamamlat.
 `,
             cache_control: { type: "ephemeral", ttl: "1h" }
           }
@@ -441,7 +703,29 @@ Müşteri satın almak istediğini belirtirse, onu doğal şekilde siparişe yö
       return res.status(502).json({ error: "empty_reply" });
     }
 
-    return res.status(200).json({ reply: replyText });
+    // SIPARIS: bot isaret biraktiysa yakala, musteriye giden metinden sil,
+    // isletmeye bildir. Bilerek "await" ediyoruz: Vercel'de cevabi
+    // dondurdukten sonra baslayan is oldurulebilir, siparis kaybolur.
+    const ayirma = siparisAyikla(replyText);
+    let musteriMetni = ayirma.temiz;
+
+    if (ayirma.siparis) {
+      ayirma.siparis.kanal = secretGecerli ? "WhatsApp" : "Web sitesi";
+      console.log("CHAT SIPARIS YAKALANDI:",
+        tekSatir(ayirma.siparis.ad), "|",
+        tekSatir(ayirma.siparis.telefon), "|",
+        tekSatir(ayirma.siparis.kanal));
+      try {
+        await siparisBildir(ayirma.siparis);
+      } catch (e) {
+        console.error("CHAT SIPARIS: bildirim HATA:", e && e.message ? e.message : e);
+      }
+      if (!musteriMetni) {
+        musteriMetni = "Siparişiniz alındı 🙂 En kısa sürede hazırlayıp kargoya veriyoruz.";
+      }
+    }
+
+    return res.status(200).json({ reply: musteriMetni });
   } catch (error) {
     console.error("CHAT.JS HATA:", error && error.message ? error.message : error);
     return res.status(500).json({ error: error.message });
