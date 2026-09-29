@@ -276,6 +276,82 @@ async function sendAlertTo(toNumber, customerPhone, customerMessage) {
   }
 }
 
+// ============================================================
+// VIDEO GONDERME (2026-09-29 EKLENDI)
+// ------------------------------------------------------------
+// chat.js, botun cevabini dondururken "medya" alanini da doldurabiliyor
+// ("tanitim" veya "fizyoterapist"). Burada once yazili cevap gonderiliyor,
+// hemen ardindan ilgili video WhatsApp uzerinden iletiliyor.
+//
+// Videolar deponun kokunde duruyor ve Vercel tarafindan halka acik servis
+// ediliyor; WhatsApp linki kendisi indirip musteriye gonderiyor.
+// WhatsApp video siniri: mp4, en fazla 16 MB.
+//
+// AYNI VIDEOYU TEKRAR GONDERMEME: her numara+video icin Redis'te 24 saatlik
+// bir isaret birakiliyor. Musteri ayni seyi tekrar sorarsa yazili cevap
+// yine gidiyor, video bir daha gitmiyor - sohbet spam'e donmuyor.
+// ============================================================
+const MEDYA = {
+  tanitim: {
+    link: BASE + "/masajur-tanitim.mp4",
+    aciklama: "Masajur — kullanım ve özellikler"
+  },
+  fizyoterapist: {
+    link: BASE + "/masajur-fizyoterapist.mp4",
+    aciklama: "Masajur — uzman anlatımı"
+  }
+};
+
+const MEDYA_TEKRAR_TTL = 86400; // 24 saat
+
+async function medyaDahaOnceGonderildiMi(phone, anahtar) {
+  try {
+    const sonuc = await redis.set(
+      "medya-gonderildi:" + phone + ":" + anahtar,
+      "1",
+      { nx: true, ex: MEDYA_TEKRAR_TTL }
+    );
+    return sonuc === null; // null -> zaten var -> daha once gonderilmis
+  } catch (e) {
+    // Redis okunamiyorsa videoyu gondermeyi tercih ediyoruz; eksik video,
+    // tekrar eden videodan daha kotu.
+    console.error("MEDYA KILIDI HATA, gonderime devam:", e && e.message ? e.message : e);
+    return false;
+  }
+}
+
+async function sendMedya(phone, anahtar) {
+  const medya = MEDYA[anahtar];
+  if (!medya) {
+    console.error("MEDYA: taninmayan anahtar:", anahtar);
+    return;
+  }
+  try {
+    const resp = await fetchWithTimeout(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "video",
+          video: { link: medya.link, caption: medya.aciklama }
+        })
+      },
+      25000
+    );
+    const data = await resp.json().catch(function () { return {}; });
+    console.log("MEDYA SONUCU (" + anahtar + "):", JSON.stringify(data).slice(0, 400));
+  } catch (e) {
+    // Video gidemezse musteri yazili cevabi zaten aldi - akisi bozma.
+    console.error("MEDYA GONDERME HATA (" + anahtar + "):", e && e.message ? e.message : e);
+  }
+}
+
 // Mesajda riskli kelime var mi?
 function needsAlert(message) {
   const lower = String(message).toLowerCase();
@@ -411,6 +487,7 @@ module.exports = async (req, res) => {
       : message;
 
     let reply = "Yanıt oluşturulamadı.";
+    let medyaAnahtari = null;
     try {
       // 2026-09-05 DUZELTME: 9sn -> 40sn. Eskiden Claude'un cevabi 9 saniyeyi
       // gecerse (yogun saatlerde/uzun cevaplarda sik oluyordu) musteri GERCEK
@@ -429,6 +506,7 @@ module.exports = async (req, res) => {
         40000
       );
       reply = claudeData.reply || reply;
+      medyaAnahtari = claudeData.medya || null;
     } catch (e) {
       console.error("CLAUDE HATA:", e?.message || e);
       reply = "Şu an kısa bir yoğunluk yaşıyoruz, birkaç dakika sonra tekrar yazabilir misiniz? Acil ise 0553 068 16 19 veya 0551 148 53 44 numaralarından bize ulaşabilirsiniz 🙂";
@@ -461,6 +539,18 @@ module.exports = async (req, res) => {
 
     const whatsappData = await whatsappResponse.json();
     console.log("WHATSAPP SONUCU:", JSON.stringify(whatsappData));
+
+    // Bot video gondermeye karar verdiyse, yazili cevabin HEMEN ardindan gonder.
+    // Once yazi, sonra video - dogal sira bu.
+    if (medyaAnahtari && MEDYA[medyaAnahtari]) {
+      const zatenGonderildi = await medyaDahaOnceGonderildiMi(phone, medyaAnahtari);
+      if (zatenGonderildi) {
+        console.log("MEDYA ATLANDI (24 saat icinde zaten gonderilmis):", medyaAnahtari);
+      } else {
+        console.log("MEDYA GONDERILIYOR:", medyaAnahtari);
+        await sendMedya(phone, medyaAnahtari);
+      }
+    }
 
     // Bu turu hafizaya ekle (ham musteri mesaji + botun cevabi)
     history.push({ role: "user", content: message });
