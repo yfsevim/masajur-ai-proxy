@@ -188,6 +188,28 @@ function istekKendiSitemizdenMi(req) {
 // ============================================================
 
 const SIPARIS_RE = /##SIPARIS##\s*([\s\S]*?)\s*##SON##/;
+const MEDYA_RE = /##MEDYA##\s*([a-zA-Z_]+)\s*##SON##/;
+const GECERLI_MEDYA = ["tanitim", "fizyoterapist"];
+
+// Cevaptan video isaretini ayikla ve musteriye gidecek temiz metni dondur.
+// Bot yanlis bir kelime yazarsa isareti yine siliyoruz - musteri asla gormez.
+function medyaAyikla(metin) {
+  const ham = String(metin || "");
+  const m = ham.match(MEDYA_RE);
+  let medya = null;
+  if (m) {
+    const ad = String(m[1]).toLowerCase().trim();
+    if (GECERLI_MEDYA.indexOf(ad) !== -1) {
+      medya = ad;
+    } else {
+      console.error("CHAT MEDYA: taninmayan medya adi, yok sayildi:", ad);
+    }
+  }
+  let temiz = ham.replace(MEDYA_RE, "");
+  temiz = temiz.replace(/##MEDYA##[\s\S]*$/, "");
+  temiz = temiz.replace(/\n{3,}/g, "\n\n").trim();
+  return { temiz: temiz, medya: medya };
+}
 
 function tekSatir(d) {
   return String(d === null || d === undefined ? "" : d).replace(/\s+/g, " ").trim();
@@ -633,6 +655,35 @@ GÜVEN & FİRMA BİLGİLERİ
 - "İşe yarar mı / gerçek mi" derse: ürünün ne işe yaradığını sakin ve net anlat, 14 gün iade + deneme imkanını güvence olarak sun.
 - Kızgın/şikayetçi müşteriye: önce sakin ve anlayışlı yaklaş, çözüm odaklı ol, gerekirse 0553 068 16 19 veya 0551 148 53 44 numaralarına yönlendir.
 ============================
+VİDEO GÖNDEREBİLİRSİN (İKİ VİDEO VAR)
+============================
+Elinde müşteriye gönderebileceğin İKİ video var. Aşağıdaki VİDEO GÖNDERME İŞARETİ kuralıyla gönderiyorsun.
+1) FİZYOTERAPİST VİDEOSU - bir fizyoterapistin ürünü anlattığı video. EN ÇOK KULLANACAĞIN VİDEO BU. Şu durumlarda gönder:
+   - Müşteri ÜRÜN HAKKINDA BİLGİ İSTEDİĞİNDE: "bilgi almak istiyorum", "ürün hakkında bilgi", "Masajur nedir", "bilgi verir misiniz", "anlatır mısınız", "ne işe yarıyor" gibi her türlü genel bilgi talebinde MUTLAKA gönder. Bu en güçlü anlatımımız, uzman ağzından geliyor.
+   - Müşteri şikayetini anlattığında (boyun ağrısı, fıtık, düzleşme, omuz gerginliği vb.) ve sen ürünü anlatırken.
+   - Şüphe veya güven sorularında: "işe yarar mı", "gerçekten faydası var mı", "bilimsel mi", "uzman ne diyor", "güvenilir mi", "boynuma zarar verir mi".
+   - Müşteri kararsızsa ve ikna olmaya ihtiyacı varsa.
+2) TANITIM VİDEOSU - ürünün nasıl kullanıldığını ve 5 terapiyi gösteren kısa tanıtım. Şu durumlarda gönder:
+   - "Nasıl kullanılıyor", "nasıl takılıyor", "kumanda nasıl çalışıyor" gibi KULLANIM soruları.
+   - "Video var mı", "fotoğraf var mı", "görsel var mı", "nasıl bir şey", "neye benziyor" gibi GÖRME talepleri — ama fizyoterapist videosunu daha önce gönderdiysen ve müşteri hâlâ görmek istiyorsa bunu gönder.
+KURALLAR:
+- Bir cevapta SADECE BİR video gönder. İkisini aynı anda gönderme.
+- Aynı videoyu aynı müşteriye sohbet boyunca BİR KEZ gönder. Daha önce gönderdiysen tekrar gönderme, "az önce paylaştığım videoda..." diye ona atıf yap.
+- Videoyu gönderirken yazıda kısa bir giriş yap ama "aşağıda", "ekte", "birazdan" deme. "Hemen paylaşıyorum", "İşte tam da bunu anlatıyor" gibi doğal cümleler kur.
+- Video GÖNDERMEDİĞİN durumda, göndereceğini ima eden hiçbir şey YAZMA.
+- Fotoğraf, PDF, katalog, kullanım kılavuzu veya fatura örneği GÖNDEREMEZSİN - sadece bu iki video. Müşteri fotoğraf isterse tanıtım videosunu gönder, videonun içinde ürünü her açıdan görüyor.
+- Parantez içinde veya yıldızlı şekilde kendi kısıtını anlatan not DÜŞME. "(Not: fotoğrafı buraya ekleyemiyorum...)" gibi cümleler müşteriye gidiyor ve çok kötü duruyor.
+- "Yapay zeka olduğum için gönderemiyorum", "sistemim izin vermiyor" gibi şeyler ASLA deme.
+============================
+VİDEO GÖNDERME İŞARETİ (SİSTEM - MÜŞTERİYE ASLA GÖSTERME)
+============================
+Video göndermeye karar verdiğinde, o cevabının EN SONUNA, ayrı bir satır olarak şunlardan birini ekle:
+##MEDYA##tanitim##SON##
+##MEDYA##fizyoterapist##SON##
+- Bu satır sadece sistem içindir. Sistem onu otomatik siler, müşteri görmez. Hakkında ASLA yorum yapma.
+- Bir cevapta EN FAZLA BİR tane olsun.
+- Sadece yukarıdaki iki kelimeden birini yaz, başka kelime yazma.
+============================
 GÜVENCELER (HER SATIŞ KONUŞMASINDA SÖYLE)
 ============================
 Müşteri tereddüt ettiğinde, fiyat sorduğunda, "düşüneyim" dediğinde veya siparişe davet ederken bu dört güvenceyi MUTLAKA hatırlat. Bunlar müşterinin riskini sıfırlar ve satışı kapatan asıl şeydir:
@@ -748,8 +799,15 @@ Ad soyad, telefon ve açık adresin ÜÇÜ birden eline geçtiğinde, "Siparişi
     // SIPARIS: bot isaret biraktiysa yakala, musteriye giden metinden sil,
     // isletmeye bildir. Bilerek "await" ediyoruz: Vercel'de cevabi
     // dondurdukten sonra baslayan is oldurulebilir, siparis kaybolur.
-    const ayirma = siparisAyikla(replyText);
+    // SIRA ONEMLI: once MEDYA, sonra SIPARIS. siparisAyikla artakalan
+    // "##SON##" parcalarini da temizlediginden, once calisirsa medya
+    // isaretinin kapanisini silip onu bulunamaz hale getiriyor.
+    const medyaAyirma = medyaAyikla(replyText);
+    const ayirma = siparisAyikla(medyaAyirma.temiz);
     let musteriMetni = ayirma.temiz;
+    if (medyaAyirma.medya) {
+      console.log("CHAT MEDYA GONDERILECEK:", medyaAyirma.medya);
+    }
 
     if (ayirma.siparis) {
       ayirma.siparis.kanal = secretGecerli ? "WhatsApp" : "Web sitesi";
@@ -767,7 +825,7 @@ Ad soyad, telefon ve açık adresin ÜÇÜ birden eline geçtiğinde, "Siparişi
       }
     }
 
-    return res.status(200).json({ reply: musteriMetni });
+    return res.status(200).json({ reply: musteriMetni, medya: medyaAyirma.medya || null });
   } catch (error) {
     console.error("CHAT.JS HATA:", error && error.message ? error.message : error);
     return res.status(500).json({ error: error.message });
