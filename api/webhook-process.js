@@ -287,9 +287,13 @@ async function sendAlertTo(toNumber, customerPhone, customerMessage) {
 // ediliyor; WhatsApp linki kendisi indirip musteriye gonderiyor.
 // WhatsApp video siniri: mp4, en fazla 16 MB.
 //
-// AYNI VIDEOYU TEKRAR GONDERMEME: her numara+video icin Redis'te 24 saatlik
-// bir isaret birakiliyor. Musteri ayni seyi tekrar sorarsa yazili cevap
-// yine gidiyor, video bir daha gitmiyor - sohbet spam'e donmuyor.
+// 2026-09-30: 24 SAATLIK KILIT KALDIRILDI.
+// Eskiden her numara+video icin Redis'te 24 saatlik bir isaret
+// birakiliyordu ve ayni video bir daha gonderilmiyordu. Sonuc: video bir
+// kez gidemediginde (ya da test sirasinda gittiginde) gercek musteriye
+// 24 saat boyunca hic gitmiyordu - bot "paylasiyorum" diyor, hicbir sey
+// gelmiyordu. Artik bot video gondermeye karar verdiyse video GIDER.
+// Ayni mesajin iki kez islenmesi zaten acquireMessageLock ile engelli.
 // ============================================================
 const MEDYA = {
   tanitim: {
@@ -302,29 +306,14 @@ const MEDYA = {
   }
 };
 
-const MEDYA_TEKRAR_TTL = 86400; // 24 saat
-
-async function medyaDahaOnceGonderildiMi(phone, anahtar) {
-  try {
-    const sonuc = await redis.set(
-      "medya-gonderildi:" + phone + ":" + anahtar,
-      "1",
-      { nx: true, ex: MEDYA_TEKRAR_TTL }
-    );
-    return sonuc === null; // null -> zaten var -> daha once gonderilmis
-  } catch (e) {
-    // Redis okunamiyorsa videoyu gondermeyi tercih ediyoruz; eksik video,
-    // tekrar eden videodan daha kotu.
-    console.error("MEDYA KILIDI HATA, gonderime devam:", e && e.message ? e.message : e);
-    return false;
-  }
-}
-
+// Video gonderir. Basarili olursa true doner.
+// WhatsApp basarili gonderimde messages[0].id donuyor; hata durumunda
+// HTTP 200 ile bile "error" alani gelebiliyor - ikisine de bakiyoruz.
 async function sendMedya(phone, anahtar) {
   const medya = MEDYA[anahtar];
   if (!medya) {
     console.error("MEDYA: taninmayan anahtar:", anahtar);
-    return;
+    return false;
   }
   try {
     const resp = await fetchWithTimeout(
@@ -346,9 +335,51 @@ async function sendMedya(phone, anahtar) {
     );
     const data = await resp.json().catch(function () { return {}; });
     console.log("MEDYA SONUCU (" + anahtar + "):", JSON.stringify(data).slice(0, 400));
+    const basarili = !!(
+      data && data.messages && data.messages[0] && data.messages[0].id
+    ) && !(data && data.error);
+    if (!basarili) {
+      console.error("MEDYA GONDERILEMEDI (" + anahtar + "), HTTP " + resp.status);
+    }
+    return basarili;
   } catch (e) {
     // Video gidemezse musteri yazili cevabi zaten aldi - akisi bozma.
     console.error("MEDYA GONDERME HATA (" + anahtar + "):", e && e.message ? e.message : e);
+    return false;
+  }
+}
+
+// Video gidemediginde ya da 24 saat kilidi yuzunden atlandiginda musteri
+// bos kalmasin: bot "paylasiyorum" dedi, elinde bir sey olmali. Videonun
+// linkini yaziyla gonderiyoruz - 12 MB'lik dosyayi tekrar atmadan.
+async function sendMedyaLinki(phone, anahtar) {
+  const medya = MEDYA[anahtar];
+  if (!medya) return;
+  try {
+    const resp = await fetchWithTimeout(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "text",
+          text: {
+            preview_url: true,
+            body: "Videoyu buradan izleyebilirsiniz:\n" + medya.link
+          }
+        })
+      },
+      15000
+    );
+    const data = await resp.json().catch(function () { return {}; });
+    console.log("MEDYA LINKI SONUCU (" + anahtar + "):", JSON.stringify(data).slice(0, 300));
+  } catch (e) {
+    console.error("MEDYA LINKI HATA (" + anahtar + "):", e && e.message ? e.message : e);
   }
 }
 
@@ -543,12 +574,12 @@ module.exports = async (req, res) => {
     // Bot video gondermeye karar verdiyse, yazili cevabin HEMEN ardindan gonder.
     // Once yazi, sonra video - dogal sira bu.
     if (medyaAnahtari && MEDYA[medyaAnahtari]) {
-      const zatenGonderildi = await medyaDahaOnceGonderildiMi(phone, medyaAnahtari);
-      if (zatenGonderildi) {
-        console.log("MEDYA ATLANDI (24 saat icinde zaten gonderilmis):", medyaAnahtari);
-      } else {
-        console.log("MEDYA GONDERILIYOR:", medyaAnahtari);
-        await sendMedya(phone, medyaAnahtari);
+      console.log("MEDYA GONDERILIYOR:", medyaAnahtari);
+      const gitti = await sendMedya(phone, medyaAnahtari);
+      if (!gitti) {
+        // Video gercekten gidemedi (WhatsApp dosyayi cekemedi, token,
+        // zaman asimi...). Musteri bos kalmasin: linki yaziyla ver.
+        await sendMedyaLinki(phone, medyaAnahtari);
       }
     }
 
