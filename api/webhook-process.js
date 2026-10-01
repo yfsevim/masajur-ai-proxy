@@ -306,6 +306,77 @@ const MEDYA = {
   }
 };
 
+// ============================================================
+// VIDEO GARANTISI (2026-10-01)
+// ------------------------------------------------------------
+// Sorun: musteri "urun hakkinda bilgi almak istiyorum" dediginde videonun
+// GITMESI gerekiyordu, ama karar modele (prompt'a) birakilmisti. Veriye
+// baktik: bilgi isteyen 234 mesajin sadece 64'unde video isareti vardi.
+// Yani musterilerin ~%70'i urunu HIC GORMEDEN fiyati duydu.
+//
+// Cozum: karari koda aliyoruz. Musterinin mesaji bilgi/gorme talebiyse ve
+// model isaret koymayi atladiysa, videoyu BIZ ekliyoruz. Prompt'a guvenmek
+// yerine garanti.
+// ============================================================
+
+// Bilgi / gorme talebi kaliplari. Reklamin hazir butonu da burada.
+const BILGI_TALEBI_KALIPLARI = [
+  "hakkında bilgi", "hakkinda bilgi", "bilgi almak", "bilgi alabilir",
+  "bilgi verir", "bilgi verebilir", "bilgi istiyorum", "bilgi rica",
+  "masajur nedir", "nedir bu", "ne işe yar", "ne ise yar",
+  "anlatır mısın", "anlatir misin", "tanıtır mısın", "tanitir misin",
+  "detay", "video", "videosu", "görsel", "gorsel", "fotoğraf", "fotograf",
+  "resmini", "resim", "nasıl bir şey", "nasil bir sey", "neye benziyor",
+  "görebilir miyim", "gorebilir miyim", "göster", "goster"
+];
+
+// Satin almis musteriler: bunlar satis konusmasi degil, destek konusmasi.
+// Kargo/iade/fatura derdi olan birine tanitim videosu atmak sacma durur.
+const MEDYA_ZORLAMA_HARIC = [
+  "kargo", "iade", "fatura", "değişim", "degisim", "garanti", "arıza", "ariza",
+  "bozuk", "çalışmıyor", "calismiyor", "şikayet", "sikayet", "nerede",
+  "teslim", "gelmedi", "para", "ödeme yaptım", "odeme yaptim", "sipariş no",
+  "siparis no", "takip", "geri gönder", "geri gonder",
+  "sipariş detay", "siparis detay", "siparişim", "siparisim",
+  "siparişimi", "siparisimi", "aldığım ürün", "aldigim urun"
+];
+
+function bilgiTalebiMi(mesaj) {
+  const s = String(mesaj || "").toLowerCase();
+  if (!s) return false;
+  if (MEDYA_ZORLAMA_HARIC.some(function (k) { return s.includes(k); })) return false;
+  return BILGI_TALEBI_KALIPLARI.some(function (k) { return s.includes(k); });
+}
+
+// Bu numaraya bu video bu sohbette BASARIYLA gonderildi mi?
+// Not: isaret SADECE basarili gonderimden SONRA birakiliyor. Basarisiz
+// gonderim hicbir seyi kilitlemiyor - eski hata tam buydu.
+const MEDYA_SOHBET_TTL = 21600; // 6 saat ~ bir sohbet oturumu
+
+function medyaIsaretAnahtari(phone, anahtar) {
+  return "medya-gonderildi:" + phone + ":" + anahtar;
+}
+
+async function medyaZatenGittiMi(phone, anahtar) {
+  try {
+    const v = await redis.get(medyaIsaretAnahtari(phone, anahtar));
+    return !!v;
+  } catch (e) {
+    // Redis okunamiyorsa gondermeyi tercih ediyoruz: eksik video,
+    // tekrar eden videodan daha kotu.
+    console.error("MEDYA ISARET OKUNAMADI, gonderime devam:", e && e.message ? e.message : e);
+    return false;
+  }
+}
+
+async function medyaIsaretiBirak(phone, anahtar) {
+  try {
+    await redis.set(medyaIsaretAnahtari(phone, anahtar), "1", { ex: MEDYA_SOHBET_TTL });
+  } catch (e) {
+    console.error("MEDYA ISARETI YAZILAMADI:", e && e.message ? e.message : e);
+  }
+}
+
 // Video gonderir. Basarili olursa true doner.
 // WhatsApp basarili gonderimde messages[0].id donuyor; hata durumunda
 // HTTP 200 ile bile "error" alani gelebiliyor - ikisine de bakiyoruz.
@@ -533,7 +604,10 @@ module.exports = async (req, res) => {
       // buydu - Anthropic API ile ilgisi yoktu.
       const claudeData = await jsonFetch(
         BASE + "/api/chat?secret=" + SECRET,
-        { message: claudeMessage, history: history },
+        // 2026-10-01: telefon da gidiyor. chat.js bunu sistem notu olarak
+        // bota veriyor, bot artik musteriden telefon numarasi istemiyor -
+        // siparis akisinda bir adim eksildi.
+        { message: claudeMessage, history: history, phone: phone },
         40000
       );
       reply = claudeData.reply || reply;
@@ -573,13 +647,35 @@ module.exports = async (req, res) => {
 
     // Bot video gondermeye karar verdiyse, yazili cevabin HEMEN ardindan gonder.
     // Once yazi, sonra video - dogal sira bu.
+    // --- VIDEO ---
+    // Model isaret koyduysa onu kullan. Koymadiysa ve musteri bilgi/gorme
+    // talebinde bulunduysa videoyu BIZ ekliyoruz (yukaridaki VIDEO GARANTISI).
+    let medyaZorlandi = false;
+    if (!medyaAnahtari && bilgiTalebiMi(message)) {
+      medyaAnahtari = "fizyoterapist";
+      medyaZorlandi = true;
+      console.log("MEDYA ZORLANDI (model isaret koymamis, mesaj bilgi talebi):", medyaAnahtari);
+    }
+
     if (medyaAnahtari && MEDYA[medyaAnahtari]) {
-      console.log("MEDYA GONDERILIYOR:", medyaAnahtari);
-      const gitti = await sendMedya(phone, medyaAnahtari);
-      if (!gitti) {
-        // Video gercekten gidemedi (WhatsApp dosyayi cekemedi, token,
-        // zaman asimi...). Musteri bos kalmasin: linki yaziyla ver.
-        await sendMedyaLinki(phone, medyaAnahtari);
+      // Model kendi karariyla isaret koyduysa kilit dinlemiyoruz: musteri
+      // "video gelmedi", "tekrar atar misin" demis olabilir, o zaman gitmeli.
+      // Sadece BIZIM zorladigimiz gonderim, ayni sohbette tekrar etmesin
+      // diye isarete bakiyor.
+      const atla = medyaZorlandi && (await medyaZatenGittiMi(phone, medyaAnahtari));
+      if (atla) {
+        console.log("MEDYA ATLANDI (bu sohbette zaten gonderilmis):", medyaAnahtari);
+      } else {
+        console.log("MEDYA GONDERILIYOR:", medyaAnahtari, medyaZorlandi ? "(zorlandi)" : "(model)");
+        const gitti = await sendMedya(phone, medyaAnahtari);
+        if (gitti) {
+          await medyaIsaretiBirak(phone, medyaAnahtari);
+        } else {
+          // Video gercekten gidemedi (WhatsApp dosyayi cekemedi, token,
+          // zaman asimi...). Isaret BIRAKILMIYOR - tekrar denenebilsin.
+          // Musteri de bos kalmasin: linki yaziyla ver.
+          await sendMedyaLinki(phone, medyaAnahtari);
+        }
       }
     }
 
