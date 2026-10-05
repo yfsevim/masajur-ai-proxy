@@ -9,19 +9,57 @@
 // yani fulfillment.js (WhatsApp mesaji icin) ve bu dosya (fatura icin)
 // birbirinden habersiz, paralel calisir. Biri bozulursa digeri etkilenmez.
 //
-// SADECE KAPIDA ODEME (COD) siparisler icin teslimat takibini baslatir.
-// Online odeme (kredi karti vb.) ile odenen siparisler zaten fatura-online.js
-// tarafindan odeme aninda faturalanmis olur - burada tekrar baslatilmaz.
+// Gorevi:
+//   - KAPIDA ODEME (COD) siparislerde: teslim-kontrol.js zincirini baslatir,
+//     fatura teslim onaylanınca kesilir.
+//   - ONLINE ODEME siparislerde: faturanin GERCEKTEN kesilip kesilmedigini
+//     fatura-kes.js'e sordurur (asagidaki 2026-10-05 notuna bakin).
 //
-// Gorevi: siparis numarasini cikar, siparisin odeme tipini Shopify'dan
-// dogrula, COD ise teslim-kontrol.js'e ilk QStash gorevini birak (telefon
-// ve isim bilgisiyle birlikte - teslimat basarisiz olursa musteriye
-// bildirim gonderebilmek icin).
+// ==========================================================================
+// 2026-10-05 KRITIK DUZELTME (22 online siparisin faturasiz kalmasi)
+// ==========================================================================
+// Eski kod online odemeli siparisleri "fatura-online.js zaten faturaladi"
+// diyerek ATLIYORDU. Bu bir VARSAYIMDI, dogrulama degildi. fatura-online.js
+// herhangi bir sebeple basarisiz olduysa (Shopify kota asimi, siparisin
+// arama indeksine henuz dusmemis olmasi, Vercel kesintisi) siparisin
+// faturalanmasi icin BASKA HICBIR SANS kalmiyordu - kargoya verilme ani
+// (yani burasi) o siparisi kurtarabilecek son noktaydi ve onu da harciyorduk.
+// Sonuc: 13520, 13521, 13525, 13529, 13537, 13545, 13546, 13552, 13554,
+// 13555, 13556, 13557, 13560 ... kalici olarak faturasiz kaldi.
+//
+// Artik online odemede de fatura-kes.js tetikleniyor. MUKERRER FATURA RISKI
+// YOK: fatura-kes.js once Redis'teki "fatura-kesildi" bayragina ve Shopify
+// etiketine bakiyor, zaten faturaliysa hicbir sey yapmadan cikiyor.
+// Yani bu cagri "kesilmediyse kes, kesildiyse dokunma" anlamina geliyor.
 
 const SECRET = "masajur_yakkoholding_2128";
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
 const API_VERSION = "2026-04";
+const FATURA_KES_URL = "https://masajur-ai-proxy.vercel.app/api/fatura-kes?secret=" + SECRET;
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+async function fetchWithTimeout(url, options, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Turkce kucultme tuzagi: "Kapıda Ödeme".toLowerCase() icinde ASCII "kapida"
+// GECMEZ (ı ile i ayri harf). Once Turkce harfleri ASCII'ye ceviriyoruz.
+function trSadelestir(s) {
+  return String(s || "")
+    .replace(/[İIı]/g, "i").replace(/[Şş]/g, "s").replace(/[Ğğ]/g, "g")
+    .replace(/[Üü]/g, "u").replace(/[Öö]/g, "o").replace(/[Çç]/g, "c")
+    .toLowerCase();
+}
 
 // Siparis numarasini guvenli cikar: "#11742-F5" -> "11742"
 function extractOrderNumber(order) {
@@ -51,6 +89,10 @@ function normalizePhone(raw) {
 
 // Fulfillment webhook payload'inda odeme bilgisi guvenilir gelmeyebilir,
 // bu yuzden Shopify'dan siparisin gercek odeme tipini dogruluyoruz.
+//
+// 2026-10-05: eski hali ciplak fetch kullaniyordu - ne zaman asimi vardi
+// ne de 429/5xx durumunda tekrar deneme. Artik fatura-kes.js ile ayni
+// dayanikli yontem kullaniliyor.
 async function isKapidaOdeme(orderNumber) {
   const clean = String(orderNumber).replace(/[^0-9]/g, "");
   const fields = "payment_gateway_names";
@@ -58,19 +100,38 @@ async function isKapidaOdeme(orderNumber) {
 
   async function fetchByName(name) {
     const url = `${base}?status=any&name=${encodeURIComponent(name)}&fields=${fields}`;
-    const r = await fetch(url, {
-      headers: { "X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json" }
-    });
-    if (!r.ok) return null;
-    const data = await r.json().catch(() => ({}));
-    return (data.orders && data.orders[0]) || null;
+    for (let deneme = 1; deneme <= 3; deneme++) {
+      try {
+        const r = await fetchWithTimeout(url, {
+          headers: { "X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json" }
+        }, 10000);
+        if (r.ok) {
+          const data = await r.json().catch(() => ({}));
+          return (data.orders && data.orders[0]) || null;
+        }
+        if ((r.status === 429 || r.status >= 500) && deneme < 3) {
+          console.error("FATURA-BASLAT: Shopify HTTP " + r.status + " (deneme " + deneme + "/3)");
+          await sleep(1500 * deneme);
+          continue;
+        }
+        return null;
+      } catch (e) {
+        console.error("FATURA-BASLAT: Shopify baglanti hatasi (deneme " + deneme + "/3):", e && e.message ? e.message : e);
+        if (deneme < 3) { await sleep(1500 * deneme); continue; }
+        return null;
+      }
+    }
+    return null;
   }
 
-  let order = await fetchByName(`#${clean}`);
-  if (!order) order = await fetchByName(clean);
+  const [byHash, byPlain] = await Promise.all([
+    fetchByName(`#${clean}`),
+    fetchByName(clean)
+  ]);
+  const order = byHash || byPlain;
   if (!order) return null; // bulunamadi - emin olamiyoruz
 
-  const gateways = (order.payment_gateway_names || []).join(" ").toLowerCase();
+  const gateways = trSadelestir((order.payment_gateway_names || []).join(" "));
   return gateways.includes("cash on delivery") || gateways.includes("kapida") || gateways.includes("cod");
 }
 
@@ -91,6 +152,30 @@ async function scheduleTeslimKontrol(orderNumber, phone, name) {
   });
   const data = await resp.json().catch(() => ({}));
   console.log("FATURA-BASLAT: teslim-kontrol gorevi birakildi:", JSON.stringify(data));
+}
+
+// 2026-10-05 EKLENDI: online odemeli siparis icin "kesilmediyse kes" cagrisi.
+// fatura-kes.js idempotent oldugu icin (Redis bayragi + Shopify etiketi
+// kontrolu) bu cagri zaten faturali bir siparise ikinci fatura kesemez.
+async function faturaGuvenlikAgi(orderNumber) {
+  if (!process.env.QSTASH_TOKEN) {
+    console.error("FATURA-BASLAT: QSTASH_TOKEN yok, online guvenlik agi calistirilamadi:", orderNumber);
+    return;
+  }
+  try {
+    const resp = await fetchWithTimeout("https://qstash.upstash.io/v2/publish/" + FATURA_KES_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + process.env.QSTASH_TOKEN,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ orderNumber: String(orderNumber), deneme: 1, sebep: "kargo_aninda_online_kontrol" })
+    }, 10000);
+    const data = await resp.json().catch(() => ({}));
+    console.log("FATURA-BASLAT: online odeme - fatura kontrolu kuyruga birakildi:", orderNumber, JSON.stringify(data));
+  } catch (e) {
+    console.error("FATURA-BASLAT: online guvenlik agi HATASI:", orderNumber, e && e.message ? e.message : e);
+  }
 }
 
 module.exports = async (req, res) => {
@@ -131,8 +216,12 @@ module.exports = async (req, res) => {
     const kapida = await isKapidaOdeme(orderNumber);
 
     if (kapida === false) {
-      console.log("FATURA-BASLAT: online odeme, atlaniyor (fatura-online.js zaten faturaladi):", orderNumber);
-      return res.status(200).send("OK - online odeme, atlandi");
+      // 2026-10-05 DUZELTME: eskiden burada "atlaniyor" deyip cikiliyordu.
+      // Artik faturanin gercekten kesilip kesilmedigini fatura-kes.js'e
+      // sorduruyoruz (kesilmisse hicbir sey yapmaz).
+      console.log("FATURA-BASLAT: online odeme - fatura durumu dogrulanacak:", orderNumber);
+      await faturaGuvenlikAgi(orderNumber);
+      return res.status(200).send("OK - online odeme, fatura kontrolu kuyruga birakildi");
     }
 
     // kapida === true VEYA null (emin olunamadi) -> guvenli taraf: teslim takibini baslat.
