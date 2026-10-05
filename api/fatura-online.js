@@ -9,33 +9,43 @@
 // 2026-09-03 GUVENLIK DUZELTMESI: bu dosyada digerlerinin (fulfillment.js,
 // fatura-baslat.js, teslim-kontrol.js) aksine HICBIR secret/yetki kontrolu
 // yoktu - URL'yi bilen HERKES, gercek bir odeme olmadan, istedigi siparis
-// numarasi icin fatura-kes.js'i dogrudan tetikleyebilirdi. Bu, "asla yanlis
-// fatura kesilmesin" kuralini dogrudan tehdit ediyordu. Artik diger
+// numarasi icin fatura-kes.js'i dogrudan tetikleyebilirdi. Artik diger
 // dosyalarla AYNI ?secret=... kontrolu yapiliyor - Shopify'daki webhook
-// URL'sinin sonuna ?secret=masajur_yakkoholding_2128 eklenmesi GEREKIR,
-// aksi halde Shopify'in gercek "odeme yapildi" bildirimleri de 401 ile
-// reddedilir.
+// URL'sinin sonuna ?secret=masajur_yakkoholding_2128 eklenmesi GEREKIR.
 //
-// NOT: Kapida odeme (COD) siparisleri bu webhook'u tetiklemez (COD'da odeme
-// online tahsil edilmedigi icin Shopify "orders/paid" olayini COD siparisler
-// icin genelde gec veya hic tetiklemez). COD siparisler fatura-baslat.js +
-// teslim-kontrol.js zinciriyle, teslim edilince faturalanmaya devam eder.
+// NOT: Kapida odeme (COD) siparisleri bu webhook'u tetiklemez; tetiklese bile
+// burada tespit edilip atlanir - COD siparislerin faturasi sadece
+// fatura-baslat.js + teslim-kontrol.js zincirinden, teslim edilince kesilir.
 //
-// Guvenlik icin ekstra bir kontrol de yapiyoruz: gelen siparisin odeme tipi
-// gercekten "kapida odeme" ise (COD), YANLISLIKLA hemen fatura KESMIYORUZ -
-// COD siparislerin faturasi sadece teslim-kontrol.js zincirinden gecmeli.
+// ==========================================================================
+// 2026-10-05 KRITIK DUZELTME (22 online siparisin faturasiz kalmasi)
+// ==========================================================================
+// Eski akis: bu dosya fatura-kes.js'i DOGRUDAN cagirip cevabini 60 saniyeye
+// kadar bekliyordu. Iki ayri soruna yol aciyordu:
 //
-// 2026-09-05 DUZELTME: fatura-kes.js'e giden istegin HICBIR zaman asimi
-// yoktu (ciplak fetch) - hesap artik Vercel Pro'da ve fatura-kes.js'in
-// kendisi (yeni, bollastirilmis haliyle) en kotu senaryoda ~60sn surebiliyor;
-// bu dosyanin da o kadar sabirli olmasi ve kendi calisma suresinin
-// (vercel.json'da artik acikca 70sn) buna yetecek kadar olmasi gerekiyor -
-// aksi halde Vercel bu fonksiyonu fatura-kes.js daha cevap vermeden
-// oldurebilir (fatura-kes.js kendi basina calismaya devam eder, bu yuzden
-// mukerrer fatura riski yok, ama "FATURA-ONLINE HATA" gibi gereksiz log
-// gurultusune yol acabilir).
+//   1) Shopify'in "orders/paid" webhook'u cevabi 5 SANIYE icinde bekler.
+//      Bizim islem ~7 saniye surunce Shopify "basarisiz" sayip AYNI olayi
+//      TEKRAR gonderiyordu. Ikinci istek, birincinin aldigi Redis kilidini
+//      dolu buluyor ve "locked_duplicate" deyip hicbir sey yapmadan
+//      cekiliyordu (Vercel loglarinda gorulen tablo tam olarak buydu).
+//
+//   2) fatura-kes.js "siparis bulunamadi" dedigi anda (Shopify kota asimi
+//      veya siparisin arama indeksine henuz dusmemis olmasi) bu dosyanin
+//      yapacagi hicbir sey yoktu - online odemede COD'daki teslim-kontrol
+//      zincirinin karsiligi olmadigi icin siparis KALICI olarak faturasiz
+//      kaliyordu.
+//
+// Yeni akis: Shopify'a ANINDA cevap veriyoruz, isi QStash'e birakiyoruz.
+// QStash gorevi fatura-kes.js'i cagirir; fatura-kes.js de gecici bir sorun
+// olursa kendi icinde artan araliklarla tekrar dener. Mukerrer fatura riski
+// yok: fatura-kes.js Redis "fatura-kesildi" bayragina ve Shopify etiketine
+// bakip zaten faturaliysa cikiyor.
+//
+// QSTASH_TOKEN tanimli degilse eski davranisa (dogrudan cagri) donuyor ki
+// sistem her halukarda calismaya devam etsin.
 
 const SECRET = "masajur_yakkoholding_2128";
+const FATURA_KES_URL = "https://masajur-ai-proxy.vercel.app/api/fatura-kes?secret=" + SECRET;
 
 async function fetchWithTimeout(url, options, ms) {
   const controller = new AbortController();
@@ -47,8 +57,17 @@ async function fetchWithTimeout(url, options, ms) {
   }
 }
 
+// Turkce kucultme tuzagi: "Kapıda Ödeme".toLowerCase() icinde ASCII "kapida"
+// GECMEZ (ı ile i ayri harf). Once Turkce harfleri ASCII'ye ceviriyoruz.
+function trSadelestir(s) {
+  return String(s || "")
+    .replace(/[İIı]/g, "i").replace(/[Şş]/g, "s").replace(/[Ğğ]/g, "g")
+    .replace(/[Üü]/g, "u").replace(/[Öö]/g, "o").replace(/[Çç]/g, "c")
+    .toLowerCase();
+}
+
 function isKapidaOdeme(order) {
-  const gateways = (order.payment_gateway_names || []).join(" ").toLowerCase();
+  const gateways = trSadelestir((order.payment_gateway_names || []).join(" "));
   return gateways.includes("cash on delivery") || gateways.includes("kapida") || gateways.includes("cod");
 }
 
@@ -66,15 +85,34 @@ function extractOrderNumber(order) {
   return "";
 }
 
-async function triggerFaturaHemen(orderNumber) {
-  const url = "https://masajur-ai-proxy.vercel.app/api/fatura-kes?secret=" + SECRET;
-  const resp = await fetchWithTimeout(url, {
+// QStash'e birak: Shopify'a aninda cevap verebilmek icin.
+// "Upstash-Delay: 30s" bilerek kondu - siparis Shopify'in arama indeksine
+// dussun diye kisa bir nefes payi. (fatura-kes.js bulamazsa zaten kendi
+// icinde 2dk/5dk/15dk... seklinde tekrar deneyecek.)
+async function kuyrugaBirak(orderNumber) {
+  const resp = await fetchWithTimeout("https://qstash.upstash.io/v2/publish/" + FATURA_KES_URL, {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + process.env.QSTASH_TOKEN,
+      "Content-Type": "application/json",
+      "Upstash-Delay": "30s"
+    },
+    body: JSON.stringify({ orderNumber: String(orderNumber), deneme: 1, sebep: "online_odeme" })
+  }, 8000);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error("QStash HTTP " + resp.status + " " + JSON.stringify(data));
+  console.log("FATURA-ONLINE: fatura-kes gorevi kuyruga birakildi:", orderNumber, JSON.stringify(data));
+}
+
+// QStash yoksa eski yontem - dogrudan cagri (yedek yol)
+async function dogrudanTetikle(orderNumber) {
+  const resp = await fetchWithTimeout(FATURA_KES_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ orderNumber: orderNumber })
+    body: JSON.stringify({ orderNumber: String(orderNumber), deneme: 1, sebep: "online_odeme" })
   }, 60000);
   const data = await resp.json().catch(() => ({}));
-  console.log("FATURA-ONLINE: fatura-kes tetiklendi:", JSON.stringify(data));
+  console.log("FATURA-ONLINE: fatura-kes dogrudan tetiklendi:", orderNumber, JSON.stringify(data));
 }
 
 module.exports = async (req, res) => {
@@ -100,12 +138,21 @@ module.exports = async (req, res) => {
       return res.status(200).send("OK - COD, atlandi");
     }
 
-    console.log("FATURA-ONLINE: online odeme tespit edildi, hemen faturalaniyor:", orderNumber);
-    await triggerFaturaHemen(orderNumber);
+    console.log("FATURA-ONLINE: online odeme tespit edildi:", orderNumber);
+
+    if (process.env.QSTASH_TOKEN) {
+      await kuyrugaBirak(orderNumber);
+    } else {
+      console.error("FATURA-ONLINE: QSTASH_TOKEN yok, yedek yol kullaniliyor (dogrudan cagri)");
+      await dogrudanTetikle(orderNumber);
+    }
 
     return res.status(200).send("OK");
   } catch (error) {
     console.error("FATURA-ONLINE HATA:", error && error.message ? error.message : error);
-    return res.status(200).send("OK");
+    // Shopify'a 500 donersek webhook'u tekrar gonderir - burada bunu BILEREK
+    // istiyoruz: gorev kuyruga hic birakilamadiysa tek sansimiz Shopify'in
+    // tekrar denemesi. (Kuyruga birakildiysa zaten bu satira hic gelinmiyor.)
+    return res.status(500).send("HATA");
   }
 };
