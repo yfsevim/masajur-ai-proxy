@@ -652,9 +652,116 @@ async function handleBackfill(req, res) {
 }
 // ============ /BACKFILL ============
 
+// ============ ELLE KURTARMA MODU (2026-10-05) ============
+// Gecmiste bir sebeple faturasiz kalmis siparisleri TARAYICIDAN tek tiklamayla
+// yeniden akisa sokmak icin. Kullanim (adres cubuguna yapistirip Enter):
+//
+//   https://masajur-ai-proxy.vercel.app/api/fatura-kes?mod=kurtar
+//     &secret=masajur_yakkoholding_2128
+//     &siparisler=13404,13488,13499
+//
+// Her siparis icin Shopify'dan durumu okunur ve DOGRU akisa yonlendirilir:
+//   - zaten faturali        -> hicbir sey yapilmaz
+//   - iptal edilmis         -> hicbir sey yapilmaz
+//   - ONLINE odeme          -> fatura-kes kuyruga birakilir (hemen faturalanir)
+//   - KAPIDA odeme (COD)    -> teslim-kontrol kuyruga birakilir; fatura ancak
+//                              Yurtici "teslim edildi" dedikten sonra kesilir
+//                              (teslim edilmemis COD siparise fatura kesilmez)
+//
+// Islerin kendisi QStash'e birakilir, bu yuzden sayfa saniyeler icinde cevap
+// doner; faturalar arka planda, aralikli olarak kesilir (Shopify kota kovasini
+// doldurmamak icin her siparis bir oncekinden 20 saniye sonra islenir).
+async function handleKurtar(req, res) {
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) {
+    console.error("FATURA-KES KURTAR: gecersiz secret");
+    return res.status(401).send("Unauthorized");
+  }
+
+  const ham = String((req.query && req.query.siparisler) || "");
+  const liste = ham.split(/[,\s]+/).map(s => s.replace(/[^0-9]/g, "")).filter(Boolean);
+  if (!liste.length) {
+    return res.status(200).send("Siparis numarasi verilmedi. Ornek: ?mod=kurtar&secret=...&siparisler=13404,13488");
+  }
+
+  const sonuclar = [];
+  let gecikme = 0;
+
+  for (const no of liste) {
+    try {
+      if (await faturalandiMi(no)) {
+        sonuclar.push(no + " -> ATLANDI (Redis kaydina gore zaten faturali)");
+        continue;
+      }
+
+      const { order, hata } = await getShopifyOrder(no);
+      if (!order) {
+        sonuclar.push(no + " -> HATA (Shopify'dan alinamadi" + (hata ? ": " + hata : ", siparis bulunamadi") + ")");
+        continue;
+      }
+
+      const etiketler = order.tags ? order.tags.split(",").map(t => t.trim()) : [];
+      if (etiketler.includes(INVOICED_TAG)) {
+        await isaretleFaturalandi(no);
+        sonuclar.push(no + " -> ATLANDI (Shopify etiketine gore zaten faturali)");
+        continue;
+      }
+      if (order.cancelled_at) {
+        sonuclar.push(no + " -> ATLANDI (siparis iptal edilmis)");
+        continue;
+      }
+
+      const kapida = isKapidaOdemeSiparis(order);
+      gecikme += 20; // saniye - Shopify/Mysoft'u ayni anda yormayalim
+
+      if (kapida) {
+        // COD: faturayi ZORLAMIYORUZ. Teslim kontrolu zincirini yeniden
+        // baslatiyoruz; Yurtici "teslim edildi" derse fatura otomatik kesilir.
+        const hedef = "https://masajur-ai-proxy.vercel.app/api/teslim-kontrol?secret=" + SECRET;
+        const r = await fetchWithTimeout("https://qstash.upstash.io/v2/publish/" + hedef, {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + process.env.QSTASH_TOKEN,
+            "Content-Type": "application/json",
+            "Upstash-Delay": gecikme + "s"
+          },
+          body: JSON.stringify({ orderNumber: no, deneme: 1, phone: null, name: "Merhaba" })
+        }, 10000);
+        sonuclar.push(no + " -> KAPIDA ODEME: teslim kontrolu yeniden baslatildi" + (r.ok ? "" : " (QSTASH HATASI)"));
+      } else {
+        const hedef = "https://masajur-ai-proxy.vercel.app/api/fatura-kes?secret=" + SECRET;
+        const r = await fetchWithTimeout("https://qstash.upstash.io/v2/publish/" + hedef, {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + process.env.QSTASH_TOKEN,
+            "Content-Type": "application/json",
+            "Upstash-Delay": gecikme + "s"
+          },
+          body: JSON.stringify({ orderNumber: no, deneme: 1, sebep: "elle_kurtarma" })
+        }, 10000);
+        sonuclar.push(no + " -> ONLINE ODEME: fatura kuyruga birakildi (" + gecikme + "sn sonra)" + (r.ok ? "" : " (QSTASH HATASI)"));
+      }
+    } catch (e) {
+      sonuclar.push(no + " -> HATA: " + (e && e.message ? e.message : e));
+    }
+  }
+
+  const metin = "KURTARMA SONUCU (" + liste.length + " siparis)\n\n" + sonuclar.join("\n") +
+    "\n\nNot: faturalar arka planda kesiliyor. Birkac dakika sonra Google Sheets " +
+    "'Fatura Kayitlari' sekmesinden ve Mysoft panelinden kontrol edin.";
+  console.log("FATURA-KES KURTAR:\n" + metin);
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  return res.status(200).send(metin);
+}
+// ============ /ELLE KURTARMA ============
+
 module.exports = async (req, res) => {
   if (req.method === "GET" && req.query && req.query.mod === "backfill") {
     return handleBackfill(req, res);
+  }
+
+  if (req.method === "GET" && req.query && req.query.mod === "kurtar") {
+    return handleKurtar(req, res);
   }
 
   if (req.method !== "POST") return res.status(200).send("OK");
