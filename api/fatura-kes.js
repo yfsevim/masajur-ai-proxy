@@ -64,6 +64,49 @@ async function releaseFaturaLock(orderNumber) {
   } catch (e) {}
 }
 
+// 2026-10-05 EKLENDI: "bir daha hic denenmeme" sorununun cozumu.
+// Eskiden Shopify'a ulasilamadiginda veya siparis henuz Shopify'in
+// arama indeksine dusmediginde (online odemede webhook, siparis
+// olusmasindan saniyeler sonra geliyor) fatura-kes.js pes ediyor,
+// online odemeli siparis icin TEKRAR DENEYECEK HICBIR MEKANIZMA
+// olmadigi icin (COD'daki teslim-kontrol zincirinin karsiligi yok)
+// siparis kalici olarak faturasiz kaliyordu.
+// Artik bu gibi GECICI durumlarda QStash'e artan araliklarla yeni bir
+// deneme birakiliyor. Mukerrer fatura riski yok: fatura-kes.js zaten
+// Redis "fatura-kesildi" bayragina ve Shopify etiketine bakip cikiyor.
+const TEKRAR_GECIKMELERI = ["2m", "5m", "15m", "30m", "1h", "2h", "4h", "8h"];
+
+async function planlaTekrarDeneme(orderNumber, sonrakiDeneme, sebep) {
+  if (sonrakiDeneme > TEKRAR_GECIKMELERI.length) return false;
+  if (!process.env.QSTASH_TOKEN) {
+    console.error("FATURA-KES: QSTASH_TOKEN yok, tekrar deneme planlanamadi:", orderNumber);
+    return false;
+  }
+  const gecikme = TEKRAR_GECIKMELERI[sonrakiDeneme - 1];
+  const targetUrl = "https://masajur-ai-proxy.vercel.app/api/fatura-kes?secret=" + SECRET;
+  try {
+    const r = await fetchWithTimeout("https://qstash.upstash.io/v2/publish/" + targetUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + process.env.QSTASH_TOKEN,
+        "Content-Type": "application/json",
+        "Upstash-Delay": gecikme
+      },
+      body: JSON.stringify({ orderNumber: String(orderNumber), deneme: sonrakiDeneme, sebep: sebep })
+    }, 10000);
+    if (!r.ok) {
+      console.error("FATURA-KES: QStash tekrar deneme birakilamadi HTTP " + r.status + ":", orderNumber);
+      return false;
+    }
+    console.log("FATURA-KES: tekrar deneme planlandi (" + gecikme + ", deneme " + sonrakiDeneme + "/" +
+      TEKRAR_GECIKMELERI.length + ", sebep: " + sebep + "):", orderNumber);
+    return true;
+  } catch (e) {
+    console.error("FATURA-KES: QStash tekrar deneme HATASI:", orderNumber, e && e.message ? e.message : e);
+    return false;
+  }
+}
+
 // Redis'teki kalici "faturalandi" bayragi - Shopify etiketinden bagimsiz,
 // Shopify'a yazma basarisiz olsa bile bu kayit dogru kalir.
 async function faturalandiMi(orderNumber) {
@@ -132,6 +175,21 @@ async function fetchWithTimeout(url, options, ms) {
 // SIRAYLA degil AYNI ANDA deniyoruz - eskiden ikinci deneme sadece ilki basarisiz
 // olunca baslardi (en kotu durumda 2x8sn = 16sn), artik ikisi paralel oldugu
 // icin en kotu durumda tek bir 10sn'lik bekleme yeterli.
+//
+// 2026-10-05 KRITIK DUZELTME (22 siparisin faturasiz kalmasina yol acan hata):
+// eski kod "if (!r.ok) return null" diyordu - yani Shopify'dan gelen HER
+// basarisiz cevabi (429 kota asimi, 5xx sunucu hatasi, zaman asimi, DNS
+// hatasi) "siparis BULUNAMADI" ile AYNI sayiyordu. Cagiran taraf da bunu
+// "boyle bir siparis yok" diye yorumlayip Sheets'e "ALARM: Shopify'da siparis
+// bulunamadi" yaziyor ve BIR DAHA HIC DENEMIYORDU. Gercekte siparis oradaydi,
+// sadece o anda Shopify cevap verememisti (siparis yogunlugu arttikca
+// Shopify'in 40 istek/2-per-saniye kota kovasi dolmaya basladi).
+// Artik:
+//   - 429 ve 5xx cevaplarda kisa araliklarla 3 kez tekrar deneniyor,
+//   - "gercekten bulunamadi" (HTTP 200 + bos liste) ile "ulasilamadi"
+//     (hata) AYRI AYRI donduruluyor,
+//   - cagiran taraf ulasilamama durumunda siparisi CÖPE ATMIYOR, QStash ile
+//     tekrar deneme planliyor.
 async function getShopifyOrder(orderNumber) {
   const clean = String(orderNumber).replace(/[^0-9]/g, "");
   const fields = "id,name,email,phone,financial_status,fulfillment_status,cancelled_at," +
@@ -140,25 +198,53 @@ async function getShopifyOrder(orderNumber) {
     "created_at,processed_at,payment_gateway_names";
   const base = `https://${SHOPIFY_STORE}/admin/api/${API_VERSION}/orders.json`;
 
+  // { order: <siparis|null>, hata: <null = saglikli cevap alindi | metin = ulasilamadi> }
   async function fetchByName(name) {
     const url = `${base}?status=any&name=${encodeURIComponent(name)}&fields=${fields}`;
-    try {
-      const r = await fetchWithTimeout(url, {
-        headers: { "X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json" }
-      }, 10000);
-      if (!r.ok) return null;
-      const data = await r.json().catch(() => ({}));
-      return (data.orders && data.orders[0]) || null;
-    } catch (e) {
-      return null;
+    let sonHata = null;
+    for (let deneme = 1; deneme <= 3; deneme++) {
+      try {
+        const r = await fetchWithTimeout(url, {
+          headers: { "X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json" }
+        }, 10000);
+
+        if (r.ok) {
+          const data = await r.json().catch(() => ({}));
+          return { order: (data.orders && data.orders[0]) || null, hata: null };
+        }
+
+        sonHata = "HTTP " + r.status;
+        // 429 (kota) ve 5xx (sunucu) gecici - tekrar denemeye deger
+        if (r.status === 429 || r.status >= 500) {
+          console.error("FATURA-KES: Shopify " + sonHata + " (deneme " + deneme + "/3):", name);
+          if (deneme < 3) { await sleep(1500 * deneme); continue; }
+          return { order: null, hata: sonHata };
+        }
+        // 401/403 gibi kalici hatalar - tekrar denemenin anlami yok ama
+        // bu da "siparis yok" DEMEK DEGIL, yetki/ayar sorunu demek.
+        console.error("FATURA-KES: Shopify " + sonHata + " (kalici hata):", name);
+        return { order: null, hata: sonHata };
+      } catch (e) {
+        sonHata = (e && e.message) ? e.message : String(e);
+        console.error("FATURA-KES: Shopify baglanti hatasi (deneme " + deneme + "/3):", name, sonHata);
+        if (deneme < 3) { await sleep(1500 * deneme); continue; }
+        return { order: null, hata: sonHata };
+      }
     }
+    return { order: null, hata: sonHata || "bilinmeyen" };
   }
 
   const [byHash, byPlain] = await Promise.all([
     fetchByName(`#${clean}`),
     fetchByName(clean)
   ]);
-  return byHash || byPlain || null;
+
+  const order = byHash.order || byPlain.order;
+  if (order) return { order, hata: null };
+  // Siparis bulunamadi: ikisinden EN AZ BIRI saglikli cevap verdiyse
+  // (hata yoksa) gercekten yok demektir; ikisi de hata verdiyse ULASILAMADI.
+  const saglikliCevapVar = (byHash.hata === null || byPlain.hata === null);
+  return { order: null, hata: saglikliCevapVar ? null : (byHash.hata || byPlain.hata) };
 }
 
 // DUZELTME: artik PUT istegin sonucunu kontrol edip logluyor - once sessizce
@@ -464,8 +550,20 @@ async function mysoftFaturaOlustur(payload) {
   };
 }
 
+// 2026-10-05 DUZELTME: Turkce kucultme tuzagi. "Kapıda Ödeme".toLowerCase()
+// sonucu "kapıda ödeme" olur ve icinde ASCII "kapida" GECMEZ (ı ile i ayri
+// harf). Yani odeme gecidinin adi Turkce yazilmissa kapida odeme siparisleri
+// YANLISLIKLA "online" sayilabilirdi. Artik Turkce harfler once ASCII
+// karsiliklarina cevriliyor.
+function trSadelestir(s) {
+  return String(s || "")
+    .replace(/[İIı]/g, "i").replace(/[Şş]/g, "s").replace(/[Ğğ]/g, "g")
+    .replace(/[Üü]/g, "u").replace(/[Öö]/g, "o").replace(/[Çç]/g, "c")
+    .toLowerCase();
+}
+
 function isKapidaOdemeSiparis(order) {
-  const gateways = (order.payment_gateway_names || []).join(" ").toLowerCase();
+  const gateways = trSadelestir((order.payment_gateway_names || []).join(" "));
   return gateways.includes("cash on delivery") || gateways.includes("kapida") || gateways.includes("cod");
 }
 
@@ -578,10 +676,31 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: false, reason: "no_order_number" });
     }
 
+    // Kacinci deneme oldugumuz (QStash ile planlanan tekrar denemelerde dolu gelir)
+    const deneme = Number(body.deneme) > 0 ? Number(body.deneme) : 1;
+
     const kilitAlindi = await acquireFaturaLock(orderNumber);
     if (!kilitAlindi) {
-      console.log("FATURA-KES: baska bir istek bu siparisi zaten isliyor, atlaniyor:", orderNumber);
-      return res.status(200).json({ ok: true, reason: "locked_duplicate" });
+      // 2026-10-05 DUZELTME: eskiden burada kosulsuz { ok: true } donuluyordu.
+      // "Kilit baskasinda" DEMEK "fatura kesildi" DEMEK DEGIL - kilidi tutan
+      // istek yarida olmus de olabilir (Vercel fonksiyonu kesildi, Mysoft
+      // zaman asimi vb.). Kilit 1 saat yasadigi icin bu sure boyunca gelen
+      // her istek "ok: true" deyip cekiliyor, siparis sessizce faturasiz
+      // kaliyordu. Artik: gercekten faturalandi mi diye bakiyoruz, hayirsa
+      // ileri bir saate tekrar deneme birakiyoruz.
+      const gercektenFaturali = await faturalandiMi(orderNumber);
+      if (gercektenFaturali) {
+        console.log("FATURA-KES: kilit baskasinda ama siparis zaten faturali, atlaniyor:", orderNumber);
+        return res.status(200).json({ ok: true, reason: "already_invoiced_redis" });
+      }
+      const planlandi = await planlaTekrarDeneme(orderNumber, deneme + 1, "locked_busy");
+      console.log("FATURA-KES: kilit baskasinda, fatura HENUZ YOK, tekrar deneme " +
+        (planlandi ? "planlandi" : "PLANLANAMADI") + ":", orderNumber);
+      if (!planlandi) {
+        await logFaturaToSheets(orderNumber, "-", "-", "-",
+          "ALARM: islem kilidi baskasindaydi, fatura kesilmedi ve tekrar deneme planlanamadi - manuel kontrol gerekli");
+      }
+      return res.status(200).json({ ok: false, reason: "locked_busy", retry: planlandi });
     }
 
     // DUZELTME: Shopify etiketine ek olarak Redis'teki kalici bayraga da bak -
@@ -611,18 +730,41 @@ module.exports = async (req, res) => {
     // yapildigi icin toplam sureye gereksiz yere ekleniyordu. Token alma
     // basarisiz olursa burada sessizce yutuluyor, mysoftFaturaOlustur() zaten
     // kendi icinde tekrar deneyecek (cache bos kalirsa).
-    const [order] = await Promise.all([
+    const [siparisSonuc] = await Promise.all([
       getShopifyOrder(orderNumber),
       getMysoftAccessToken().catch(e => {
         console.error("FATURA-KES: on-yukleme token alinamadi (mysoftFaturaOlustur tekrar deneyecek):", e && e.message ? e.message : e);
       })
     ]);
+    const order = siparisSonuc.order;
+    const shopifyHatasi = siparisSonuc.hata;
 
     if (!order) {
-      console.error("FATURA-KES: siparis bulunamadi:", orderNumber);
-      await logFaturaToSheets(orderNumber, "-", "-", "-", "ALARM: Shopify'da siparis bulunamadi - manuel kontrol gerekli");
+      // 2026-10-05 DUZELTME: iki durumu artik ayiriyoruz.
+      // (a) Shopify'a ULASILAMADI (429/5xx/zaman asimi) -> siparis orada,
+      //     sadece soramadik. Kesinlikle pes etmemeliyiz.
+      // (b) Shopify saglikli cevap verdi ama siparis YOK -> online odemede
+      //     bu cogu zaman "siparis henuz arama indeksine dusmedi" demektir
+      //     (webhook, siparis olusmasindan saniyeler sonra geliyor), yani
+      //     yine gecici olabilir. Her iki durumda da artan araliklarla
+      //     tekrar deniyoruz; deneme hakki bitince ALARM'a dusuyoruz.
+      const sebep = shopifyHatasi ? "shopify_ulasilamadi" : "siparis_indekste_yok";
       await releaseFaturaLock(orderNumber);
-      return res.status(200).json({ ok: false, reason: "order_not_found" });
+      const planlandi = await planlaTekrarDeneme(orderNumber, deneme + 1, sebep);
+
+      if (planlandi) {
+        console.error("FATURA-KES: siparis alinamadi (" + sebep +
+          (shopifyHatasi ? ": " + shopifyHatasi : "") + "), tekrar denenecek:", orderNumber);
+        return res.status(200).json({ ok: false, reason: sebep, retry: true });
+      }
+
+      // Deneme hakki bitti (yaklasik 16 saat boyunca denendi) - ARTIK gercek alarm
+      console.error("FATURA-KES: siparis TUM denemelere ragmen alinamadi:", orderNumber);
+      await logFaturaToSheets(orderNumber, "-", "-", "-",
+        "ALARM: Shopify'dan siparis " + TEKRAR_GECIKMELERI.length + " denemede de alinamadi (" +
+        (shopifyHatasi ? "son hata: " + shopifyHatasi : "siparis bulunamadi") +
+        ") - FATURA KESILMEDI, manuel kontrol gerekli");
+      return res.status(200).json({ ok: false, reason: sebep, retry: false });
     }
 
     const existingTags = order.tags ? order.tags.split(",").map(t => t.trim()) : [];
@@ -677,10 +819,17 @@ module.exports = async (req, res) => {
       console.error("FATURA-KES: BELIRSIZ DURUM, otomatik tekrar denenmeyecek, manuel kontrol gerekli:", orderNumber, sonuc.mesaj);
       return res.status(200).json({ ok: false, reason: "ambiguous_timeout", sonuc });
     } else {
-      await logFaturaToSheets(orderNumber, faturaTipi, payload.aliciUnvanAdSoyad, payload.genelToplam,
-        "KESILEMEDI: " + (sonuc.mesaj || "bilinmeyen"));
+      // 2026-10-05: Mysoft "olusturmadim" dedi (zaman asimi DEGIL, net cevap) -
+      // fatura kesinlikle olusmadi, dolayisiyla tekrar denemek MUKERRER FATURA
+      // riski tasimiyor. Gecici bir Mysoft hatasi/kesintisi olabilecegi icin
+      // artik sessizce pes etmiyoruz, artan araliklarla tekrar deniyoruz.
       await releaseFaturaLock(orderNumber);
-      return res.status(200).json({ ok: false, sonuc });
+      const planlandi = await planlaTekrarDeneme(orderNumber, deneme + 1, "mysoft_reddetti");
+      await logFaturaToSheets(orderNumber, faturaTipi, payload.aliciUnvanAdSoyad, payload.genelToplam,
+        "KESILEMEDI: " + (sonuc.mesaj || "bilinmeyen") +
+        (planlandi ? " - otomatik tekrar denenecek (deneme " + deneme + "/" + TEKRAR_GECIKMELERI.length + ")"
+                   : " - TEKRAR DENEME HAKKI BITTI, manuel kontrol gerekli"));
+      return res.status(200).json({ ok: false, retry: planlandi, sonuc });
     }
   } catch (error) {
     console.error("FATURA-KES HATA:", error && error.message ? error.message : error);
