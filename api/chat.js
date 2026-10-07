@@ -141,6 +141,9 @@ function gecmiseOnbellekIsaretiKoy(messages) {
   return messages;
 }
 
+const { Redis } = require("@upstash/redis");
+const redis = Redis.fromEnv();
+
 const SECRET = "masajur_yakkoholding_2128";
 const ALLOWED_WEBSITE_ORIGINS = [
   "https://masajur.com",
@@ -267,11 +270,67 @@ async function zamanAsimliFetch(url, opts, ms) {
   }
 }
 
+// 2026-10-07: env degiskeni tanimsiz/bos kaldiginda siparis bildirimi HIC
+// gitmiyordu ve kimse fark etmiyordu. Artik env bossa bu iki numara
+// kullaniliyor - bildirim her halukarda gider.
+const VARSAYILAN_BILDIRIM_NUMARALARI = ["905530681619", "905511485344"];
+
 function bildirimNumaralari() {
-  return String(process.env.SIPARIS_BILDIRIM_NUMARALARI || "")
+  const envden = String(process.env.SIPARIS_BILDIRIM_NUMARALARI || "")
     .split(",")
     .map(function (n) { return n.replace(/[^0-9]/g, "").trim(); })
     .filter(function (n) { return n.length >= 10; });
+  if (envden.length) return envden;
+  console.error("CHAT SIPARIS: SIPARIS_BILDIRIM_NUMARALARI bos, varsayilan numaralar kullaniliyor");
+  return VARSAYILAN_BILDIRIM_NUMARALARI.slice();
+}
+
+// ============================================================
+// MUKERRER SIPARIS KORUMASI (2026-10-07 EKLENDI)
+// ------------------------------------------------------------
+// GERCEK VAKA: 06.10'da tek bir musteriye (Zeynep Ozkan) "Siparisiniz
+// onaylanmistir" mesaji 9'ar saniye arayla 6 KEZ gitti; isletmeye de 6
+// ayri bildirim dustu. Ayni gun baska bir musteride 3, 03.10'da bir
+// baskasinda 2 kez tekrarlandi. 9 gunde 6 gercek siparis vardi ama 14
+// bildirim gonderilmisti - yani bildirimlerin yarisindan fazlasi
+// mukerrerdi ve Shopify'a elle girilirken ayni kisiye birden fazla paket
+// cikma riski dogdu.
+//
+// KOK SEBEP: webhook-process.js'teki mukerrer mesaj kilidi (wamid bazli)
+// Redis hata verdiginde "guvenli taraf" diyerek devam ediyor. Bot sadece
+// yazi yazarken bu dogru tercihti (sessiz kalmaktansa tekrar cevapla);
+// artik SIPARIS olusturdugu icin ayni tercih mukerrer siparis uretiyor.
+//
+// COZUM: kilidi mesaja degil SIPARISIN KENDISINE koyuyoruz. Ayni
+// telefon + ayni ad + ayni adres 24 saat icinde ikinci kez gelirse
+// bildirim GONDERILMEZ. Mesajin neden tekrarlandigi onemsiz hale gelir.
+// ============================================================
+const SIPARIS_KILIT_SURESI = 24 * 3600; // saniye
+
+function siparisParmakIzi(s) {
+  const ham = (tekSatir(s.ad) + "|" + tekSatir(s.telefon) + "|" + tekSatir(s.adres))
+    .toLowerCase()
+    .replace(/[^a-z0-9ğüşıöç]/gi, "");
+  // kisa ve sabit uzunlukta bir ozet (djb2)
+  let h = 5381;
+  for (let i = 0; i < ham.length; i++) {
+    h = ((h << 5) + h + ham.charCodeAt(i)) >>> 0;
+  }
+  return String(h);
+}
+
+// true = bu siparis ILK KEZ geliyor, bildirim gonderilebilir
+async function siparisKilidiAl(s) {
+  try {
+    const anahtar = "siparis-bildirildi:" + (tekSatir(s.telefon) || "yok") + ":" + siparisParmakIzi(s);
+    const sonuc = await redis.set(anahtar, "1", { nx: true, ex: SIPARIS_KILIT_SURESI });
+    return sonuc !== null;
+  } catch (e) {
+    // Redis'e ulasilamiyorsa bildirimi gondermeyi tercih ediyoruz:
+    // kaybolan siparis, mukerrer bildirimden daha pahali.
+    console.error("CHAT SIPARIS: kilit okunamadi, bildirime devam:", e && e.message ? e.message : e);
+    return true;
+  }
 }
 
 // Sablon parametreleri. temsilci_bildirim gibi 2 parametreli sablonlar icin
@@ -395,13 +454,11 @@ async function siparisSheetsLogla(s, durum) {
 }
 
 // Isletmeye bildir. Once sablon, olmazsa serbest metin. Her ihtimalde Sheets'e yazar.
+// Donus: true = en az bir numaraya bildirim ULASTI.
 async function siparisBildir(s) {
   const numaralar = bildirimNumaralari();
   const sonuclar = [];
-  if (!numaralar.length) {
-    console.error("CHAT SIPARIS: SIPARIS_BILDIRIM_NUMARALARI tanimsiz - WhatsApp bildirimi gonderilmedi");
-    sonuclar.push("numara-yok");
-  }
+  let enAzBiriGitti = false;
   const metin = siparisMetni(s);
   for (let k = 0; k < numaralar.length; k++) {
     const numara = numaralar[k];
@@ -415,10 +472,14 @@ async function siparisBildir(s) {
     } catch (e) {
       sonuc = { ok: false, sebep: "istisna " + (e && e.message ? e.message : e) };
     }
+    if (sonuc.ok) enAzBiriGitti = true;
     console.log("CHAT SIPARIS BILDIRIM:", numara, sonuc.ok ? "OK" : "BASARISIZ", sonuc.sebep);
     sonuclar.push(numara + "=" + (sonuc.ok ? "OK" : "HATA"));
   }
+  // Sheets kaydi sessiz yedek: normalde kimse bakmaz, ama bildirim hic
+  // gitmediyse siparisin tek izi bu satir olur.
   await siparisSheetsLogla(s, sonuclar.join(" "));
+  return enAzBiriGitti;
 }
 
 module.exports = async (req, res) => {
@@ -629,7 +690,7 @@ Müşteriler WhatsApp'ta ortalama 3-5 kelime yazıyor. Sen ise paragraf paragraf
 REKLAMDAN GELEN HAZIR MESAJLAR (ÇOK ÖNEMLİ - PARA BURADA YANIYOR)
 ============================
 Meta reklamımızda 3 hazır buton var. Müşteri bunlara basıp geliyor, yani mesajın kendisi bize niyetini söylüyor. Her birine VERİLECEK CEVAP FARKLIDIR:
-1) "Kapıda ödeme ile sipariş vermek istiyorum" → BU BİR SİPARİŞTİR. Bu kişi satın alma kararını VERMİŞ. Ona kapıda ödemeyi ANLATMA (zaten biliyor), ürünü anlatma, şikayetini SORMA, siteye/telefona ASLA yönlendirme. Tek yapacağın şey bilgileri istemek. Örnek: "Tabii, siparişinizi hemen buradan oluşturayım 🙂 Ad Soyad ve açık adresinizi yazmanız yeterli. Ödemeyi kapıda, ürünü teslim alırken yapıyorsunuz, kargo da ücretsiz." — Bu cevaptan sonra SİPARİŞ ALMA akışına geç.
+1) "Kapıda ödeme ile sipariş vermek istiyorum" → BU BİR SİPARİŞTİR. Bu kişi satın alma kararını VERMİŞ. Ona kapıda ödemeyi ANLATMA (zaten biliyor), ürünü anlatma, şikayetini SORMA, siteye/telefona ASLA yönlendirme. Tek yapacağın şey bilgileri istemek. Örnek: "Tabii, siparişinizi hemen buradan oluşturayım 🙂 Ad Soyad ve açık adresinizi yazmanız yeterli. Ödemeyi kapıda, ürünü teslim alırken yapıyorsunuz, kargo da ücretsiz. Dilerseniz masajur.com üzerinden kendiniz de verebilirsiniz." — Bu cevaptan sonra SİPARİŞ ALMA akışına geç.
 2) "Masajur™ hakkında bilgi almak istiyorum" → Kısa tut, broşür okuma. Rahatsızlıkları say, TEK soru sor ve AYNI CEVAPTA FİZYOTERAPİST VİDEOSUNU GÖNDER (##MEDYA##fizyoterapist##SON## işareti). Müşteri ne alacağını GÖRMELİ; sadece yazı okuyan müşteri ikna olmuyor. Örnek: "Merhaba 🙂 Masajur özellikle boyun fıtığı, boyun düzleşmesi, boyun-omuz ağrıları ve kollardaki uyuşma için tasarlandı. Bir fizyoterapistin ürünü anlattığı videoyu hemen paylaşıyorum. Sizde en çok hangisi rahatsızlık veriyor?"
 3) "Boyun şikâyetimi anlatmak istiyorum" → Hiçbir şey anlatma, DİNLE, video da gönderme. Örnek: "Buyurun, dinliyorum 🙂 Şikayetiniz ne zamandır var, ağrı daha çok ensede mi yoksa omuzlara da yayılıyor mu?" — Müşteri şikayetini anlattıktan SONRA, ürünü anlattığın o cevapta fizyoterapist videosunu gönder.
 ============================
@@ -644,7 +705,8 @@ Fiyatı soran her 3 müşteriden 1'i, çıplak fiyatı görünce sohbeti bırak�
 Pakette Masajur Boyun Terapi Cihazı, ortopedik visco yastık, kumanda, şarj kablosu ve 499 TL değerindeki Boyun Sağlığı Rehberi e-kitabı var. Kargo ücretsiz.
 
 Ödemeyi kapıda, ürünü teslim alırken yapıyorsunuz. İsterseniz siparişinizi hemen buradan oluşturayım — ad soyad ve açık adresinizi yazmanız yeterli."
-- Fiyat mesajında web sitesi linki VERME, telefon numarası VERME. Müşteri fiyatı öğrenip siteye gitsin diye değil, burada sipariş versin diye konuşuyorsun.
+- SIRA ÖNEMLİ: önce "buradan alayım" davetini yaz. Hemen altına TEK SATIR hâlinde site seçeneğini ekle: "Dilerseniz masajur.com üzerinden kendiniz de verebilirsiniz." Linki uzun uzun anlatma, tek satır yeter. Amaç: adres yazmak istemeyen müşteri elinde hiçbir yol kalmadan sohbeti bırakmasın.
+- Telefon numarası VERME. Müşteri açıkça telefonla sipariş vermek isterse verirsin.
 - Taksiti fiyat mesajında KENDİLİĞİNDEN gündeme getirme. Sadece müşteri "taksit var mı" diye sorarsa ya da fiyata itiraz ederse söyle.
 ============================
 "PAHALI" İTİRAZI (ÇOK ÖNEMLİ - SAVUNMAYA GEÇME)
@@ -662,7 +724,7 @@ Tek seferde ödemek istemezseniz kredi kartına taksit seçeneğimiz de var, ist
 SİPARİŞ DAVETİ (CTA) - "İSTER MİSİNİZ?" YASAK
 ============================
 - "Sipariş vermek ister misiniz?" ASLA YAZMA. Bu soru müşteriye bedava bir "hayır" kapısı açıyor. Müşteri zaten ilgilendiği için yazıyor; ona karar sorusu değil, YOL göstereceksin.
-- Bunun yerine her zaman NASIL alacağını söyle: "Kapıda ödeme ile gönderebiliriz. Siparişinizi buradan oluşturmak isterseniz ad soyad ve açık adresinizi yazmanız yeterli."
+- Bunun yerine her zaman NASIL alacağını söyle: "Kapıda ödeme ile gönderebiliriz. Siparişinizi buradan oluşturmak isterseniz ad soyad ve açık adresinizi yazmanız yeterli. Dilerseniz masajur.com üzerinden kendiniz de verebilirsiniz."
 - Aynı şekilde "İsterseniz sipariş verebilirsiniz", "Almak ister misiniz?", "Nasıl ilerlemek isterseniz?" gibi evet/hayır ya da belirsiz bitişler de YASAK.
 - Bir cevapta ya TEK bir soru sorarsın ya TEK bir sipariş daveti yaparsın. İkisini birlikte YAPMA.
 ============================
@@ -830,14 +892,17 @@ Kargo: Ücretsiz
 1-3 iş günü içinde adresinizde olur, Yurtiçi Kargo ile teslim edilecektir. Kargoya verildiğinde buradan bilgilendireceğim.
    - E-posta verdiyse özete onu da ekle, vermediyse o satırı hiç yazma.
    - Bu özeti müşteri bilgileri kendi yazdığı gibi göster; adresi düzeltme, kısaltma veya tamamlama.
+   - SİPARİŞ NUMARASI VEYA KARGO TAKİP NUMARASI UYDURMA. Bu aşamada henüz numara yoktur. Müşteri sorarsa: "Numaranız kargoya verildiğinde buradan iletilecek" de.
 KURALLAR:
 - Kredi kartı / banka kartı bilgisi ASLA İSTEME. Ödeme kapıda, teslimatta yapılır.
 - Adresi eksik verirse (sadece il/ilçe gibi) mahalle, sokak, bina no ve daire no isteyerek tamamlat. Kargo için tam adres şart.
 - Müşteri kendisi başka bir telefon numarası verirse (örn. "teslimat için eşimin numarası") onu kullan; vermediyse sistem notundaki numarayı kullan ve numara SORMA.
-- WEB SİTESİ LİNKİ VE TELEFON NUMARASI SİPARİŞ SIRASINDA YASAKTIR. Aşağıdaki İKİ durum dışında ASLA verme:
-  (a) Müşteri AÇIKÇA "siteden almak istiyorum", "site linkini atar mısın", "kendim siteden vereyim" derse → linki ver: https://masajur.com/products/masajur™-boyun-masaj-aleti-visco-yastik-hediye
-  (b) Müşteri AÇIKÇA "telefonla sipariş vermek istiyorum", "arayarak vereyim" derse → 0553 068 16 19 veya 0551 148 53 44.
-  Bunların dışında; müşteri sipariş vermek istediğinde, fiyat sorduğunda, kapıda ödemeyi sorduğunda, taksiti sorduğunda ya da kararsız kaldığında link ve numara VERİLMEZ. "İki seçeneğiniz var" diye kanal listesi sunmak KESİNLİKLE YASAK — tek kanal sensin.
+- BİRİNCİ YOL HER ZAMAN SENSİN. Siparişi sen alırsın; müşteriyi "siteye gidin" diye savma. Ama müşteriyi yolsuz bırakma: bilgi istediğin mesajın SONUNA tek satır olarak site seçeneğini ekle.
+  Kalıp: "... ad soyad ve açık adresinizi yazmanız yeterli. Dilerseniz masajur.com üzerinden kendiniz de verebilirsiniz."
+  - Bu satır TEK SATIR olacak, en sonda duracak ve asıl daveti gölgelemeyecek. Linki ayrı mesajda, büyük puntoyla veya ilk cümlede verme.
+  - Site linki: https://masajur.com/products/masajur™-boyun-masaj-aleti-visco-yastik-hediye
+- TELEFON NUMARASINI sipariş sırasında VERME. Sadece müşteri AÇIKÇA "telefonla sipariş vermek istiyorum", "arayarak vereyim" derse → 0553 068 16 19 veya 0551 148 53 44.
+- Müşteri siteyi seçtiyse ısrar etme, linki ver ve "takıldığınız olursa buradayım" de.
 - Müşteri bilgilerini vermekte tereddüt ederse ("bilgilerimi vermek istemiyorum", "güvenli mi") güven ver ve burada kalmasını sağla: "Bilgilerinizi sadece kargo ve fatura için kullanıyoruz, ödemeyi de kapıda yapıyorsunuz, önceden hiçbir ödeme yok 🙂" — bu cümleden sonra bile bilgi vermiyorsa site linkini verebilirsin.
 - Bilgi toplarken robotik olma; tek tek sorgu çeker gibi değil, doğal bir satış temsilcisi gibi yaz.
 - SİPARİŞ AKIŞINI UZATMA. Alım niyeti belli olduktan sonra amacın en az mesajla siparişi tamamlamak. Gereksiz soru, uzun ürün anlatımı, ekstra öneri yok. Her fazladan mesaj sipariş kaybetme riski.
@@ -906,13 +971,35 @@ Ad soyad ve açık adresin İKİSİ birden eline geçtiğinde (telefon numarası
         tekSatir(ayirma.siparis.ad), "|",
         tekSatir(ayirma.siparis.telefon), "|",
         tekSatir(ayirma.siparis.kanal));
+      let bildirimGitti = false;
       try {
-        await siparisBildir(ayirma.siparis);
+        // Sigorta: ayni siparis (ayni telefon + ad + adres) 24 saat icinde
+        // ikinci kez gelirse isletmeye tekrar bildirim gonderme. Bugun boyle
+        // bir sorun gorunmuyor, ama webhook tarafindaki mukerrer mesaj kilidi
+        // Redis hata verdiginde aciliyor - o an olusacak ikinci bildirim
+        // Shopify'a ikinci kez girilmesine yol acabilir.
+        const ilkKez = await siparisKilidiAl(ayirma.siparis);
+        if (!ilkKez) {
+          console.log("CHAT SIPARIS: ayni siparis 24 saat icinde zaten bildirildi, tekrar gonderilmedi:",
+            tekSatir(ayirma.siparis.ad), tekSatir(ayirma.siparis.telefon));
+          bildirimGitti = true; // ilk seferinde gitmisti
+        } else {
+          bildirimGitti = await siparisBildir(ayirma.siparis);
+        }
       } catch (e) {
         console.error("CHAT SIPARIS: bildirim HATA:", e && e.message ? e.message : e);
       }
       if (!musteriMetni) {
         musteriMetni = "Teşekkür ederim, bilgilerinizi aldım 🙂 Siparişiniz onaylanmıştır. 1-3 iş günü içinde adresinizde olur, Yurtiçi Kargo ile teslim edilecektir.";
+      }
+      // Hicbir numaraya bildirim ulasmadiysa musteri "siparisim alindi"
+      // sanip beklemesin - siparisin tek izi Sheets satiri kalir ve o da
+      // fark edilmeyebilir. Kisa bir teyit istegi ekliyoruz.
+      if (!bildirimGitti) {
+        console.error("CHAT SIPARIS: HICBIR numaraya bildirim gonderilemedi:",
+          tekSatir(ayirma.siparis.ad), tekSatir(ayirma.siparis.telefon));
+        musteriMetni = musteriMetni +
+          "\n\nKüçük bir not: siparişinizi hızlandırmak için 0553 068 16 19 numarasına da kısa bir mesaj atar mısınız? Teyit edip hemen kargoya verelim 🙂";
       }
     }
 
