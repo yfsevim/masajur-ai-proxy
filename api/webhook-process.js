@@ -221,20 +221,83 @@ function bekle(ms) {
 // deneme KALDIRILMISTI. Burasi atlanmis. Artik burada da tek seferlik:
 // nadiren kaybolan bir log satiri, sikca mukerrer gorunen satirdan cok
 // daha az zararli.
-async function logToSheets(phone, message, reply) {
+//
+// ==========================================================================
+// 2026-10-07 (AKSAM) NIHAI COZUM - "ya mukerrer ya kayip" ikileminin sonu
+// ==========================================================================
+// 07.10 loglarinda olcum: tek gunde 43 istek zaman asimina ugrayip 2./3.
+// denemede kurtarilmis (~50 fazladan satir), 16 istek ise 3 denemede de
+// basarisiz olmus. Yani tekrar deneme VARKEN mukerrer satir, YOKKEN kayip
+// satir uretiyorduk. Ayni dert kargo/fatura/sepet/yorum/teslim uclarinda da
+// goruldu - sorun bu dosyada degil, ortak Apps Script ucunda.
+//
+// Cozum tek tarafli olamazdi, iki parcali:
+//   1) Apps Script tarafi artik "id" alaninı taniyor. Ayni id ikinci kez
+//      gelirse satiri YAZMIYOR, "mukerrer: true" deyip aninda donuyor.
+//      (CacheService'te 6 saat tutuluyor; tekrar denemeler saniyeler icinde
+//      oldugu icin fazlasiyla yeterli.)
+//   2) Boylece tekrar deneme ARTIK GUVENLI: id sayesinde kac kez
+//      denersek deneyelim en fazla tek satir olusur.
+//
+// id olarak WhatsApp'in kendi mesaj kimligi (wamid) kullaniliyor - zaten
+// benzersiz ve mukerrer isleme kilidinde de ayni deger kullaniliyor.
+//
+// Sure butcesi: en fazla 2 deneme x 12sn + 0,5sn bekleme = ~24,5 saniye.
+// Bu fonksiyon musteriye cevap GONDERILDIKTEN sonra calisiyor, yani bu
+// bekleme musteriyi hicbir sekilde etkilemiyor.
+const SHEETS_LOG_DENEME_SAYISI = 2;
+const SHEETS_LOG_ZAMAN_ASIMI_MS = 12000;
+const SHEETS_LOG_DENEME_ARASI_MS = 500;
+
+async function logToSheets(phone, message, reply, kayitId) {
   if (!process.env.SHEETS_URL) return;
-  try {
-    await fetchWithTimeout(
-      process.env.SHEETS_URL,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phone, message: message, reply: reply })
-      },
-      12000
-    );
-  } catch (e) {
-    console.error("SHEETS LOG HATA - satir Sheets'e yazilmis OLABILIR, mukerrer kayit riski yuzunden TEKRAR DENENMIYOR:", e && e.message ? e.message : e);
+
+  const govde = JSON.stringify({
+    id: kayitId || "",     // Apps Script bununla mukerreri eliyor
+    phone: phone,
+    message: message,
+    reply: reply
+  });
+
+  for (let deneme = 1; deneme <= SHEETS_LOG_DENEME_SAYISI; deneme++) {
+    const basladi = Date.now();
+    try {
+      const resp = await fetchWithTimeout(
+        process.env.SHEETS_URL,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: govde
+        },
+        SHEETS_LOG_ZAMAN_ASIMI_MS
+      );
+      // Cevabi okuyoruz ki Apps Script'in kendi olctugu sureyi (ms) ve
+      // satirin mukerrer sayilip sayilmadigini loga dusurebilelim.
+      // Boylece "8 saniye nereye gidiyor" sorusu tahmin olmaktan cikiyor.
+      const metin = await resp.text().catch(() => "");
+      console.log(
+        "SHEETS LOG OK (deneme " + deneme + ", " + (Date.now() - basladi) + "ms):",
+        String(metin).slice(0, 200)
+      );
+      return;
+    } catch (e) {
+      const hataMetni = e && e.message ? e.message : e;
+      const gecen = Date.now() - basladi;
+      if (deneme < SHEETS_LOG_DENEME_SAYISI) {
+        console.error(
+          "SHEETS LOG ZAMAN ASIMI (deneme " + deneme + "/" + SHEETS_LOG_DENEME_SAYISI +
+          ", " + gecen + "ms), tekrar deneniyor - id sayesinde mukerrer olusmaz:",
+          hataMetni
+        );
+        await bekle(SHEETS_LOG_DENEME_ARASI_MS);
+      } else {
+        console.error(
+          "SHEETS LOG BASARISIZ (son deneme " + deneme + "/" + SHEETS_LOG_DENEME_SAYISI +
+          ", " + gecen + "ms), vazgeciliyor:",
+          hataMetni
+        );
+      }
+    }
   }
 }
 
@@ -686,7 +749,9 @@ module.exports = async (req, res) => {
     await saveHistory(phone, history);
 
     // Sohbeti Sheets'e kaydet
-    await logToSheets(phone, message, reply);
+    // 2026-10-07: wamid artik Sheets'e de gonderiliyor - Apps Script ayni
+    // kimlikli ikinci istegi yazmadan geri ceviriyor (mukerrer satir sonu).
+    await logToSheets(phone, message, reply, messageId);
 
     // Riskli kelime varsa yetkililere bildir
     if (needsAlert(message)) {
