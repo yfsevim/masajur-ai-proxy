@@ -431,25 +431,78 @@ function siparisMetni(s) {
   return satirlar.join("\n");
 }
 
+// ===========================================================================
+// 2026-10-07 IKI AYRI HATA DUZELTILDI
+// ===========================================================================
+// 1) KAYIP SIPARIS KAYDI: buradan "type: siparis" gonderiliyordu ama Apps
+//    Script tarafinda "siparis" diye bir dal YOKTU. Istek en alttaki genel
+//    "else" dalina dusuyor, orasi da phone/message/reply alanlarini ariyordu -
+//    biz ad/telefon/adres gonderdigimiz icin hepsi bos kaliyor ve
+//    "Musteri Konusmalari" sekmesine TARIHTEN BASKA HICBIR SEY ICERMEYEN bos
+//    bir satir yaziliyordu. Yani WhatsApp'tan alinan siparislerin Sheets
+//    kaydi bugune kadar hic olusmamis; tek kayit senin telefonuna gelen
+//    bildirim mesajiydi. (Ayni hata 03.09'da "tarama" tipinde de yasanmis.)
+//    Apps Script'e artik "siparis" dali ve "WhatsApp Siparişleri" sekmesi
+//    eklendi; ayrica taninmayan her tip icin "Bilinmeyen Kayıtlar" guvenlik
+//    agi kondu ki bu hata bir daha sessizce olusmasin.
+//
+// 2) ZAMAN ASIMINDA KAYIP: tek deneme vardi, 12 saniyede cevap gelmezse
+//    kayit tamamen kayboluyordu (07.10 19:36'da tam olarak bu oldu).
+//    Artik her kayda benzersiz bir kimlik ekleniyor; Apps Script ayni kimligi
+//    ikinci kez gorurse satiri YAZMIYOR. Bu sayede tekrar deneme guvenli
+//    hale geldi: iki deneme yapiyoruz, en fazla tek satir olusuyor.
+const SIPARIS_SHEETS_DENEME_SAYISI = 2;
+const SIPARIS_SHEETS_ZAMAN_ASIMI_MS = 12000;
+
 async function siparisSheetsLogla(s, durum) {
-  try {
-    if (!process.env.SHEETS_URL) return;
-    await zamanAsimliFetch(process.env.SHEETS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "siparis",
-        ad: tekSatir(s.ad),
-        telefon: tekSatir(s.telefon),
-        adres: tekSatir(s.adres),
-        eposta: tekSatir(s.eposta),
-        not: tekSatir(s.not),
-        kanal: tekSatir(s.kanal),
-        durum: String(durum || "")
-      })
-    }, 12000);
-  } catch (e) {
-    console.error("CHAT SIPARIS: Sheets log HATA:", e && e.message ? e.message : e);
+  if (!process.env.SHEETS_URL) return;
+
+  // Kimlik: ayni siparisin ayni durum kaydi ikinci kez yazilmasin.
+  const kayitId = "sip_" + siparisParmakIzi(s) + "_" +
+    String(durum || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 24);
+
+  const govde = JSON.stringify({
+    type: "siparis",
+    id: kayitId,
+    ad: tekSatir(s.ad),
+    telefon: tekSatir(s.telefon),
+    adres: tekSatir(s.adres),
+    eposta: tekSatir(s.eposta),
+    not: tekSatir(s.not),
+    kanal: tekSatir(s.kanal),
+    durum: String(durum || "")
+  });
+
+  for (let deneme = 1; deneme <= SIPARIS_SHEETS_DENEME_SAYISI; deneme++) {
+    const basladi = Date.now();
+    try {
+      const resp = await zamanAsimliFetch(process.env.SHEETS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: govde
+      }, SIPARIS_SHEETS_ZAMAN_ASIMI_MS);
+      const metin = await resp.text().catch(() => "");
+      console.log(
+        "CHAT SIPARIS: Sheets log OK (deneme " + deneme + ", " + (Date.now() - basladi) + "ms):",
+        String(metin).slice(0, 200)
+      );
+      return;
+    } catch (e) {
+      const hataMetni = e && e.message ? e.message : e;
+      const gecen = Date.now() - basladi;
+      if (deneme < SIPARIS_SHEETS_DENEME_SAYISI) {
+        console.error(
+          "CHAT SIPARIS: Sheets log ZAMAN ASIMI (deneme " + deneme + "/" +
+          SIPARIS_SHEETS_DENEME_SAYISI + ", " + gecen + "ms), tekrar deneniyor " +
+          "- kimlik sayesinde mukerrer olusmaz:", hataMetni
+        );
+      } else {
+        console.error(
+          "CHAT SIPARIS: Sheets log BASARISIZ (son deneme " + deneme + "/" +
+          SIPARIS_SHEETS_DENEME_SAYISI + ", " + gecen + "ms):", hataMetni
+        );
+      }
+    }
   }
 }
 
