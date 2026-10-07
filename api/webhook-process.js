@@ -204,36 +204,37 @@ function bekle(ms) {
 // gorulen "This operation was aborted" (zaman asimi) icin artik kisa bir
 // bekleme ile toplam 3 kez deneniyor; hepsi basarisiz olursa sadece
 // hatayi loglayip vazgeciyor.
-const SHEETS_LOG_DENEME_SAYISI = 3;
-const SHEETS_LOG_DENEME_ARASI_MS = 1000;
-
+// 2026-10-07 DUZELTME (MUKERRER SHEETS KAYDI - analizleri bozuyordu):
+// Yukaridaki 3 denemeli yapi, Google Apps Script zaman asimina ugradiginda
+// AYNI SATIRI tekrar gonderiyordu. Apps Script ise cevabi bize
+// ulastiramasa bile satiri COGU ZAMAN ZATEN EKLEMIS oluyor - yani
+// "cevap alamadim" ile "yazilamadi" ayirt edilemiyor. Sonuc: tek bir bot
+// cevabi Sheets'e 2-3 kez dusuyordu (8sn zaman asimi + 1sn bekleme = tam
+// 9 saniye arayla; 06.10'da tek mesaj 3 satir olarak gorundu).
+//
+// Bu sadece bir gorunum sorunu degil: "Musteri Konusmalari" sayfasi hem
+// gunluk analiz botunun (analiz.js) hem de elle yapilan incelemelerin
+// girdisi. Mukerrer satirlar mesaj sayilarini ve "bot kendini tekrar
+// ediyor" turu tespitleri yanlis gosteriyor.
+//
+// fatura-kes.js'te ayni ders #12558 vakasinda ogrenilmis ve orada tekrar
+// deneme KALDIRILMISTI. Burasi atlanmis. Artik burada da tek seferlik:
+// nadiren kaybolan bir log satiri, sikca mukerrer gorunen satirdan cok
+// daha az zararli.
 async function logToSheets(phone, message, reply) {
   if (!process.env.SHEETS_URL) return;
-
-  for (let deneme = 1; deneme <= SHEETS_LOG_DENEME_SAYISI; deneme++) {
-    try {
-      await fetchWithTimeout(
-        process.env.SHEETS_URL,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: phone, message: message, reply: reply })
-        },
-        8000
-      );
-      if (deneme > 1) {
-        console.log("SHEETS LOG: " + deneme + ". denemede basarili oldu.");
-      }
-      return; // basarili, fonksiyondan cik
-    } catch (e) {
-      const hataMetni = e && e.message ? e.message : e;
-      if (deneme < SHEETS_LOG_DENEME_SAYISI) {
-        console.error("SHEETS LOG HATA (deneme " + deneme + "/" + SHEETS_LOG_DENEME_SAYISI + "), tekrar denenecek:", hataMetni);
-        await bekle(SHEETS_LOG_DENEME_ARASI_MS);
-      } else {
-        console.error("SHEETS LOG HATA (son deneme " + deneme + "/" + SHEETS_LOG_DENEME_SAYISI + "), vazgeciliyor:", hataMetni);
-      }
-    }
+  try {
+    await fetchWithTimeout(
+      process.env.SHEETS_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: phone, message: message, reply: reply })
+      },
+      12000
+    );
+  } catch (e) {
+    console.error("SHEETS LOG HATA - satir Sheets'e yazilmis OLABILIR, mukerrer kayit riski yuzunden TEKRAR DENENMIYOR:", e && e.message ? e.message : e);
   }
 }
 
