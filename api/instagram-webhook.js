@@ -8,8 +8,9 @@
 //      SIPARIS_KARGO_KURALI).
 //   2) Gonderilerimize bir yorum geldiginde -> ONCE yorumun OLUMSUZ/KOTU/
 //      SIKAYET olup olmadigina Claude ile bakilir:
-//        - OLUMSUZSA: musteriye HICBIR CEVAP gitmez (ne public ne DM),
-//          SADECE staff'a (sana) WhatsApp'tan bilgilendirme gider.
+//        - OLUMSUZSA: musteriye HICBIR CEVAP gitmez (ne public ne DM).
+//          Once staff'a (sana) WhatsApp'tan yorumun TAM METNIYLE bildirim
+//          gider, ARDINDAN yorum gonderinin altindan SILINIR (2026-10-09).
 //        - OLUMLU/NOTR ise: (a) yorumun ALTINA otomatik bir public cevap
 //          yazilir (fiyat/nasil alinir/siparis soruyorsa FIYAT_SIPARIS
 //          grubu SIRAYLA/rotasyon, degilse Claude'a o yoruma OZEL bir cevap
@@ -748,6 +749,38 @@ async function yorumaPublicYanitVer(commentId, text) {
   }
 }
 
+// ===========================================================================
+// 2026-10-09 EKLENDI: OLUMSUZ YORUMU OTOMATIK SIL
+// ===========================================================================
+// Olumsuz/kufurlu/sikayet iceren yorum tespit edildiginde yorum gonderinin
+// altindan SILINIYOR. Silme GERI ALINAMAZ, bu yuzden sira onemli:
+//   1) ONCE staff'a WhatsApp bildirimi gider (bildirimde yorumun TAM METNI
+//      var) - boylece yorum silinse bile ne yazdigi elimizde kalir,
+//   2) SONRA silme islemi yapilir.
+// Bildirim gonderilemezse bile silme yapilir; ama o durumda log'a yazilir.
+//
+// Izin: yoruma public cevap yazmak icin kullanilan izinle (instagram_manage_
+// comments) ayni. Yeni bir izin/token gerekmiyor. Sadece KENDI gonderimizdeki
+// yorumlar silinebilir - zaten webhook sadece onlari getiriyor.
+async function yorumuSil(commentId, etiket) {
+  try {
+    const resp = await fetch(
+      `https://graph.instagram.com/v23.0/${commentId}?access_token=${process.env.INSTAGRAM_ACCESS_TOKEN}`,
+      { method: "DELETE" }
+    );
+    const data = await resp.json().catch(() => ({}));
+    if (data && data.error) {
+      console.error("IG WEBHOOK: YORUM SILINEMEDI -", etiket, JSON.stringify(data.error));
+      return false;
+    }
+    console.log("IG WEBHOOK: OLUMSUZ YORUM SILINDI -", etiket, "yorumId:", commentId);
+    return true;
+  } catch (e) {
+    console.error("IG WEBHOOK: YORUM SILME ISTISNASI -", etiket, e && e.message ? e.message : e);
+    return false;
+  }
+}
+
 module.exports = async (req, res) => {
   // --- Meta'nin webhook DOGRULAMA cagrisi (sadece ayarlarken bir kere) ---
   if (req.method === "GET") {
@@ -836,7 +869,9 @@ module.exports = async (req, res) => {
           const olumsuzMu = await yorumOlumsuzMu(yorumMetni);
           if (olumsuzMu) {
             console.log("IG WEBHOOK: OLUMSUZ/KOTU YORUM TESPIT EDILDI, cevap gonderilmiyor -", yorumEtiketi);
+            // Sira kritik: once bildirim (yorum metni elimizde kalsin), sonra silme.
             await bildirOlumsuzYorum(yorumEtiketi, yorumMetni);
+            await yorumuSil(yorumId, yorumEtiketi);
             continue;
           }
 
