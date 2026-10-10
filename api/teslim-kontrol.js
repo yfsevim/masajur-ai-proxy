@@ -185,6 +185,37 @@ async function fetchWithTimeout(url, options, ms) {
   }
 }
 
+// ===========================================================================
+// 2026-10-10 EKLENDI: SHEETS KAYITLARINA "id" (MUKERRER KORUMASI)
+// ===========================================================================
+// Apps Script tarafina 07.10'da id bazli mukerrer korumasi eklendi: ayni id
+// ikinci kez gelirse satir YAZILMIYOR. Bu dosyadaki Sheets cagrilarinin hicbiri
+// id gondermiyordu, yani korumadan yararlanmiyordu.
+//
+// Bu dosyada tekrar deneme YOK - yani klasik "zaman asimi -> tekrar dene ->
+// cift satir" sorunu burada yasanmiyor. Asil risk baska:
+//   1) QStash en az bir kez teslim garantisi verir; ayni teslim-kontrol gorevi
+//      iki kez calisabilir. Redis bayraklari WhatsApp mesajlarini koruyor ama
+//      Sheets satirlarini korumuyordu.
+//   2) Ayni olay hem normal akistan hem taramadan tetiklenebiliyor.
+// Artik her kayit kendi anahtariyla gidiyor, ikinci kez yazilmiyor.
+//
+// Alarm kaydinda anahtara DURUM METNI de karisiyor: ayni siparis icin farkli
+// sebeplerle alarm dusebilmeli, sadece AYNI alarmin tekrari engellenmeli.
+function kayitId_(onek, ...parcalar) {
+  const kuyruk = parcalar
+    .map(p => String(p == null ? "" : p).replace(/[^A-Za-z0-9]/g, "").slice(0, 28))
+    .filter(Boolean)
+    .join("_");
+  return onek + "_" + (kuyruk || "yok");
+}
+
+// Tarama ozeti her calismada yeni bir olay - anahtara dakika damgasi giriyor
+// ki ayri calismalar birbirini bastirmasin, ayni dakikadaki tekrar bastirsin.
+function dakikaDamgasi_() {
+  return new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
+}
+
 // 2026-09-02 EKLENDI: #12415 vakasi (Yurtici panelinde "Iade Durumu: IADE" ve
 // "Alici Adi: FATIH TATLI" ile ayri bir "Teslim Alan: YAKUP SEVIM" gorunen,
 // ama receiverCustName sirket adiyla eslesmedigi icin sirketeIadeEdildi=false
@@ -411,6 +442,7 @@ async function logTeslimBasarisizToSheets(phone, name, orderNumber, branch, stat
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         type: "teslim_basarisiz",
+        id: kayitId_("tbs", orderNumber),
         phone: phone,
         name: name,
         orderNumber: orderNumber,
@@ -439,6 +471,7 @@ async function logTeslimatGunuToSheets(orderNumber, name, phone, status) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         type: "teslimat_gunu",
+        id: kayitId_("tgu", orderNumber),
         orderNumber: String(orderNumber || ""),
         name: String(name || ""),
         phone: String(phone || ""),
@@ -447,6 +480,43 @@ async function logTeslimatGunuToSheets(orderNumber, name, phone, status) {
     }, 15000);
   } catch (e) {
     console.error("TESLIM-KONTROL: teslimat-gunu Sheets log HATA (TEKRAR DENENMIYOR):", e && e.message ? e.message : e);
+  }
+}
+
+// ===========================================================================
+// 2026-10-10 EKLENDI: REHBER MESAJI SHEETS KAYDI ("Rehber Mesajları" sekmesi)
+// ===========================================================================
+// Teslimattan sonra giden Boyun Sagligi Rehberi mesajinin BUGUNE KADAR hicbir
+// kaydi yoktu: kime gitti, kac kisiye gitti, kaci basarisiz oldu sadece Vercel
+// loglarindan ("REHBER MESAJI" aramasiyla) gorulebiliyordu - loglar da birkac
+// gun sonra siliniyor. Yani "bu ay kac musteriye rehber ulasti" sorusunun
+// cevabi hicbir yerde yoktu.
+//
+// "kaynak" sutunu: mesaj normal teslimat akisindan mi yoksa gun sonu
+// taramasindan mi tetiklendi. Tarama bir guvenlik agi - oradan cok sayida
+// rehber mesaji gidiyorsa normal akis (QStash zinciri) sizdiriyor demektir.
+//
+// Apps Script tarafinda type:"rehber" dali hazir ve deploy edilmis olmali.
+// Tekrar deneme YOK, hata disari yayilmaz - bu kayit patlasa bile musteriye
+// mesaj zaten gitmis ve Redis bayragi zaten atilmis oluyor.
+async function logRehberToSheets(orderNumber, name, phone, kaynak, status) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    await fetchWithTimeout(process.env.SHEETS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "rehber",
+        id: kayitId_("reh", orderNumber),
+        orderNumber: String(orderNumber || ""),
+        name: String(name || ""),
+        phone: String(phone || ""),
+        kaynak: String(kaynak || ""),
+        status: String(status || "")
+      })
+    }, 15000);
+  } catch (e) {
+    console.error("TESLIM-KONTROL: rehber Sheets log HATA (TEKRAR DENENMIYOR):", e && e.message ? e.message : e);
   }
 }
 
@@ -463,6 +533,7 @@ async function logKapidanDonenMesajToSheets(orderNumber, name, phone, sebep, mus
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         type: "kapidan_donen_mesaj",
+        id: kayitId_("kdm", orderNumber),
         orderNumber: String(orderNumber || ""),
         name: String(name || ""),
         phone: String(phone || ""),
@@ -534,6 +605,16 @@ async function logTeslimAlarmToSheets(orderNumber, deneme, status) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         type: "fatura_alarm",
+        // Anahtara durum metni de giriyor: ayni siparise FARKLI sebeple alarm
+        // dusebilmeli, sadece AYNI alarmin tekrari engellenmeli.
+        //
+        // DAVRANIS DEGISIKLIGI (bilincli): takilmis bir siparis her kontrol
+        // turunda ayni alarmi uretiyordu ve "Manuel Kontrol Gerekli" sekmesine
+        // ayni satir tekrar tekrar dusuyordu. Artik 6 saatlik pencere icinde
+        // AYNI metinli alarm bir kez yaziliyor. Sorun cozulmeden 6 saat
+        // gecerse yeni satir yine duser - yani alarm kaybolmuyor, sadece
+        // tekrari susuyor.
+        id: kayitId_("alr", orderNumber, status || "5gun"),
         orderNumber: orderNumber,
         deneme: deneme,
         status: status || "5 GUN GECTI - TESLIM ONAYLANAMADI - FATURA KESILMEDI - MANUEL KONTROL GEREKLI"
@@ -661,6 +742,11 @@ async function sendTeslimatGunuMesaji(phone, name, orderNumber) {
 // 2026-09-18: musteriye teslimat sonrasi rehber linki.
 // Sablon: "teslimat_rehber" (tr) - tek degisken: {{1}} = musteri adi.
 // Link sablonun ICINDE sabit metin olarak duruyor, parametre degil.
+//
+// 2026-10-10 DEGISIKLIK: eskiden true/false donuyordu; bu Sheets'e "gitti mi"
+// disinda hicbir sey yazamamak demekti. Artik WhatsApp'in GERCEK cevabini
+// ("Gonderildi OK (wamid...)" / "GITMEDI HATA [131026]: ...") metin olarak
+// donduruyor - boylece basarisiz gonderimlerin SEBEBI de tabloya dusuyor.
 async function sendRehberMesaji(phone, name, orderNumber) {
   try {
     const resp = await fetchWithTimeout(
@@ -694,33 +780,55 @@ async function sendRehberMesaji(phone, name, orderNumber) {
     const data = await resp.json().catch(() => ({}));
     const waStatus = readWaStatus(data);
     console.log("REHBER MESAJI (" + orderNumber + "):", waStatus);
-    return true;
+    return waStatus;
   } catch (e) {
     console.error("REHBER MESAJI HATA (" + orderNumber + "):", e && e.message ? e.message : e);
-    return false;
+    return "GITMEDI HATA: " + (e && e.message ? e.message : e);
   }
 }
 
 // Cagri noktalarindan kullanilan GUVENLI sarmalayici.
-// Telefon kontrolu + mukerrer kontrolu + gonderim + bayrak, hepsi burada.
-// HICBIR hata disari yayilmaz - fatura akisi bu fonksiyondan etkilenmez.
-async function sendRehberMesajiGuvenli(phone, name, orderNumber) {
+// Telefon kontrolu + mukerrer kontrolu + gonderim + bayrak + Sheets kaydi,
+// hepsi burada. HICBIR hata disari yayilmaz - fatura akisi bu fonksiyondan
+// etkilenmez.
+//
+// 2026-10-10: "kaynak" parametresi eklendi ("teslimat" | "tarama") ve her
+// anlamli sonuc Sheets'e yaziliyor.
+//
+// HANGI DURUM KAYDEDILIYOR:
+//   telefon yok        -> KAYDEDILIR. Teslim edilmis ama rehberi hic
+//                         alamayacak musteri; bu bilgi kaybolmamali.
+//   zaten gonderilmis  -> KAYDEDILMEZ. Yeni bir olay degil; satir zaten var.
+//   gonderildi         -> KAYDEDILIR (WhatsApp'in gercek cevabiyla)
+//   basarisiz          -> KAYDEDILIR. "Gitmedi" bilgisi "gitti" kadar degerli:
+//                         Redis bayragi atildigi icin bu musteriye bir daha
+//                         DENENMEYECEK, yani tek iz bu satir olacak.
+//   beklenmeyen hata   -> KAYDEDILIR
+//
+// Sheets kaydi hep EN SONDA - buraya gelindiginde mesaj gonderilmis ve Redis
+// bayragi atilmis durumda, bu satir yazilamasa bile akista hicbir sey degismez.
+async function sendRehberMesajiGuvenli(phone, name, orderNumber, kaynak) {
+  const nereden = kaynak || "teslimat";
   try {
     if (!phone) {
       console.log("REHBER: telefon yok, gonderilemedi:", orderNumber);
+      await logRehberToSheets(orderNumber, name, "", nereden, "GONDERILMEDI: telefon yok");
       return false;
     }
     if (await alreadySentRehber(orderNumber)) {
       console.log("REHBER: zaten gonderilmis, atlandi:", orderNumber);
-      return false;
+      return false;   // yeni olay degil - Sheets'e ikinci satir yazilmaz
     }
-    const sonuc = await sendRehberMesaji(phone, name, orderNumber);
+    const waStatus = await sendRehberMesaji(phone, name, orderNumber);
     // Gonderim basarisiz olsa da bayrak atiliyor - mukerrer mesaj riskini
     // tekrar deneme kazancina tercih etmiyoruz (yukaridaki nota bakiniz).
     await markSentRehber(orderNumber);
-    return sonuc;
+    await logRehberToSheets(orderNumber, name, phone, nereden, waStatus);
+    return String(waStatus).indexOf("Gonderildi OK") === 0;
   } catch (e) {
-    console.error("REHBER: beklenmeyen hata (FATURA AKISI ETKILENMEDI):", orderNumber, e && e.message ? e.message : e);
+    const hata = e && e.message ? e.message : String(e);
+    console.error("REHBER: beklenmeyen hata (FATURA AKISI ETKILENMEDI):", orderNumber, hata);
+    await logRehberToSheets(orderNumber, name, phone, nereden, "BEKLENMEYEN HATA: " + hata);
     return false;
   }
 }
@@ -929,7 +1037,11 @@ async function logTaramaOzetToSheets(ozet) {
     await fetchWithTimeout(process.env.SHEETS_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "tarama", status: ozet })
+      body: JSON.stringify({
+        type: "tarama",
+        id: kayitId_("tar", dakikaDamgasi_()),
+        status: ozet
+      })
     }, 15000);
   } catch (e) {}
 }
@@ -1025,7 +1137,7 @@ async function handleTarama(req, res) {
           (order.customer && ((order.customer.first_name || "") + " " + (order.customer.last_name || "")).trim()) ||
           (order.shipping_address && order.shipping_address.name) ||
           "";
-        await sendRehberMesajiGuvenli(rehberTelefon, rehberMusteriAdi, String(no));
+        await sendRehberMesajiGuvenli(rehberTelefon, rehberMusteriAdi, String(no), "tarama");
         faturaSayisi++;
         detaylar.push(no + ":FATURA");
       } else if (detail && detail.sirketeIadeEdildi) {
@@ -1190,7 +1302,7 @@ module.exports = async (req, res) => {
       // kendi icinde try/catch'li - patlasa bile yukaridaki fatura
       // tetiklemesi zaten tamamlanmis durumda, akis bozulmaz.
       const rehberAdi = (name && name !== "Merhaba") ? name : "";
-      await sendRehberMesajiGuvenli(phone, rehberAdi, orderNumber);
+      await sendRehberMesajiGuvenli(phone, rehberAdi, orderNumber, "teslimat");
       return res.status(200).send("OK - teslim edildi, fatura tetiklendi");
     }
 
