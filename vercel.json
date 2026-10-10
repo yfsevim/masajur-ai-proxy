@@ -7,6 +7,10 @@
     "api/fatura-online.js": { "maxDuration": 30 },
     "api/fatura-baslat.js": { "maxDuration": 60 },
     "api/chat.js": { "maxDuration": 45 },
-    "api/analiz.js": { "maxDuration": 180 }
-  }
+    "api/analiz.js": { "maxDuration": 180 },
+    "api/gelen-faturalar.js": { "maxDuration": 120 }
+  },
+  "crons": [
+    { "path": "/api/gelen-faturalar?secret=masajur_yakkoholding_2128&gun=10", "schedule": "40 4 * * *" }
+  ]
 }
