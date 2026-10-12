@@ -692,6 +692,12 @@ function gecmiseOnbellekIsaretiKoy(messages) {
 // Sheets satirinda ve Vercel logunda duruyor.
 // ===========================================================================
 
+// Yasakli emojiyi musteriye gitmeden once duzeltir. Prompt kurali degil,
+// kod kurali: prompt tarafi iki ayri olcumde tutmadi (11.10 analizi + canli test).
+function emojiDuzelt(metin) {
+  return String(metin || "").replace(/\u{1F60A}/gu, "\u{1F642}");
+}
+
 const SIPARIS_RE = /##SIPARIS##\s*([\s\S]*?)\s*##SON##/;
 const SIPARIS_KANALI = "Facebook";
 const SIPARIS_SHEETS_DENEME = 2;
@@ -859,7 +865,7 @@ async function kullaniciyaCevapUret(psid, kullaniciMesaji) {
   // Bilerek "await" ediyoruz: Vercel cevap dondukten sonra basla
   // yan isleri oldurebilir, siparis kaybolur.
   const ayirma = siparisAyikla(hamCevap);
-  const cevap = ayirma.temiz;
+  const cevap = emojiDuzelt(ayirma.temiz);
   if (ayirma.siparis) {
     await siparisBildir(ayirma.siparis);
   }
