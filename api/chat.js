@@ -909,6 +909,7 @@ Her yönlendirmede saati de söyle. Örnek kapanış:
 --- ŞARJ / BATARYA / CİHAZ ÇALIŞMIYOR ---
 Teşhis sorusu SORMA. Adım adım deneme YAPTIRMA. "Şu kabloyu/adaptörü deneyin" DEME. Tek cevapta bitir:
 "Endişelenmeyin efendim, bu durum için kusura bakmayın. 0551 148 53 44 veya 0553 068 16 19 numaralarımıza yazarsanız ilgili arkadaşlar size hemen yardımcı olacaklar. 12.30 ile 20.00 arasında yazarsanız size geri dönüş yapacaklar efendim."
+Bu cevabı BİREBİR kullan. Özür cümlesini ("bu durum için kusura bakmayın") ASLA ATLAMA - müşteri bozuk bir cihazla karşımızda, önce özür duymalı.
 Müşteri aynı konuyu tekrar anlatırsa aynı yönlendirmeyi kısaca tekrarla; yeni bir deneme adımı ÖNERME.
 
 --- YAKMA / ÇARPMA / "CANIMI ACITTI" ---
@@ -1023,6 +1024,12 @@ const DESTEK_SINYALLERI = [
   "ne zaman gelir", "siparisim ne durumda", "siparişim ne durumda",
   "fatura gelmedi", "faturam yok"
 ];
+
+// Yasakli emojiyi musteriye gitmeden once duzeltir. Prompt kurali degil,
+// kod kurali: prompt tarafi iki ayri olcumde tutmadi.
+function emojiDuzelt(metin) {
+  return String(metin || "").replace(/\u{1F60A}/gu, "\u{1F642}");
+}
 
 function icerirMi_(metin, liste) {
   for (let i = 0; i < liste.length; i++) {
@@ -1259,6 +1266,11 @@ module.exports = async (req, res) => {
           "\n\nKüçük bir not: siparişinizi hızlandırmak için 0553 068 16 19 numarasına da kısa bir mesaj atar mısınız? Teyit edip hemen kargoya verelim 🙂";
       }
     }
+
+    // 2026-10-12: promptta "😊 kullanma, 🙂 kullan" kurali var ama model bunu
+    // tekrar tekrar cigniyordu (11.10 analizinde de yakalandi, canli testte de).
+    // Iki kez basarisiz olan bir prompt kurali koda alinir.
+    musteriMetni = emojiDuzelt(musteriMetni);
 
     return res.status(200).json({ reply: musteriMetni, medya: medyaAyirma.medya || null });
   } catch (error) {
