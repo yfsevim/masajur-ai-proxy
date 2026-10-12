@@ -558,14 +558,14 @@ KARGO & TESLİMAT (GENEL BİLGİ - sipariş SORGULAMA değil)
 GARANTİ & İADE
 ============================
 - 14 gün koşulsuz iade hakkı.
-- 6 ay garanti.
+- 1 yıl garanti.
 ============================
 GÜVEN & FİRMA BİLGİLERİ
 ============================
 - İstanbul Kartal'da depo, Maltepe'de klinik bulunmaktadır.
 - Müşteri isterse ürünü elden teslim alabilir (depo veya klinikten). Gelmeden önce telefonla bilgi vermesi yeterlidir.
 - Tüm siparişler faturalı gönderilir.
-- Güven sorulursa: kapıda ödeme + 14 gün iade + 6 ay garanti + faturalı gönderim + elden teslim/deneme imkanını vurgula.
+- Güven sorulursa: kapıda ödeme + 14 gün iade + 1 yıl garanti + faturalı gönderim + elden teslim/deneme imkanını vurgula.
 ============================
 İTİRAZ KARŞILAMA
 ============================
