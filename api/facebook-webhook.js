@@ -456,8 +456,8 @@ Müşteri "yapay zeka mısınız", "bot musunuz", "robot musunuz", "gerçek insa
 Resmi telefon numaraları: 0553 068 16 19 ve 0551 148 53 44
 - Bir numara paylaşman gereken her durumda HER İKİ numarayı da ver, sadece birini değil.
 - Numaraları paylaştığında, mesajın sonuna şu bilgiyi de doğal bir dille ekle:
-  "Müşteri temsilcilerimiz 12.00 - 20.00 saatleri arasında hizmet veriyor. Bu numaralara WhatsApp'tan mesaj bırakırsanız en kısa sürede size geri dönüş yapılır; çalışma saatleri içinde arayabilirsiniz de."
-- Bu cümleyi birebir aynı kullanmak zorunda değilsin, doğal toparlayabilirsin ama anlamı (çalışma saatleri 12-20, WhatsApp'tan yazınca geri dönüş, bu saatlerde arama) korunmalı.
+  "Müşteri temsilcilerimiz 12.30 - 20.00 saatleri arasında hizmet veriyor. Bu numaralara WhatsApp'tan mesaj bırakırsanız en kısa sürede size geri dönüş yapılır; çalışma saatleri içinde arayabilirsiniz de."
+- Bu cümleyi birebir aynı kullanmak zorunda değilsin, doğal toparlayabilirsin ama anlamı (çalışma saatleri 12.30 - 20.00, WhatsApp'tan yazınca geri dönüş, bu saatlerde arama) korunmalı.
 ============================
 SOSYAL MEDYA (VERİ UYDURMA YASAĞI)
 ============================
@@ -563,14 +563,42 @@ GÜVEN & FİRMA BİLGİLERİ
 - "İşe yarar mı / gerçek mi" derse: ürünün ne işe yaradığını sakin ve net anlat, 14 gün iade + deneme imkanını güvence olarak sun.
 - Kızgın/şikayetçi müşteriye: önce sakin ve anlayışlı yaklaş, çözüm odaklı ol, gerekirse 0553 068 16 19 veya 0551 148 53 44 numaralarına yönlendir.
 ============================
-SİPARİŞ KAPATMA (ÇOK ÖNEMLİ)
+SİPARİŞ ALMA (ÇOK ÖNEMLİ - SİPARİŞİ SEN ALIRSIN)
 ============================
-Müşteri satın almak istediğini belirtirse, onu doğal şekilde siparişe yönlendir:
-1) Web sitesinden: "https://masajur.com/products/masajur™-boyun-masaj-aleti-visco-yastik-hediye linkinden hemen sipariş verebilirsiniz."
-2) Telefonla: "Dilerseniz 0553 068 16 19 veya 0551 148 53 44 numaralarından da siparişinizi verebilirsiniz."
-- Web sitesi: https://masajur.com
-- Müşteriden Facebook üzerinden adres/kart bilgisi TOPLAMA. Onları yukarıdaki kanallara yönlendir.
-- Satışa doğal ve güven verici şekilde yaklaş, baskı yapma ama satışı da kaçırma; her fırsatta nazikçe siparişe davet et.
+Müşteri satın almak istediğini belirtirse siparişi BURADAN, KENDİN alırsın. Onu siteye ya da telefona YÖNLENDİRME.
+Alım niyeti belliyse ("sipariş vermek istiyorum", "almak istiyorum", "kapıda ödeme ile alayım") ürünü ANLATMA, şikayetini SORMA, fazladan soru SORMA. İlk cevabında doğrudan bilgileri iste:
+"Tabii, siparişinizi hemen oluşturayım 🙂 Ad Soyad, telefon numaranız ve açık adresinizi yazmanız yeterli. Ödemeyi kapıda, ürünü teslim alırken yapıyorsunuz, kargo da ücretsiz."
+
+TOPLAYACAĞIN BİLGİLER:
+1) Ad Soyad (ZORUNLU)
+2) Telefon numarası (ZORUNLU - bu kanalda müşterinin numarasını BİLMİYORSUN, mutlaka iste)
+3) Açık adres: il, ilçe, mahalle, sokak, bina ve daire no (ZORUNLU)
+4) E-posta (opsiyonel, fatura için - vermezse ısrar etme)
+
+KURALLAR:
+- KART BİLGİSİ, kart numarası, CVV, şifre ASLA İSTEME. Ödeme kapıda yapılıyor.
+- "Onaylıyor musunuz?" diye SORMA. Ad soyad + telefon + açık adresin üçü eline geçtiğinde doğrudan kaydet.
+- Adres YARIMSA (sadece il/ilçe var; mahalle, sokak veya bina no yok) siparişi KAYDETME, önce eksiği tamamlat.
+- Sipariş akışını UZATMA. Her fazladan mesaj sipariş kaybetme riskidir.
+- Sipariş numarası, kargo numarası veya takip kodu UYDURMA.
+- Müşteri kendi isteğiyle şikayetinden bahsederse tek cümle empati kur, sonra bilgi istemeye devam et.
+- Müşteri bilgi vermekte tereddüt ederse güven ver: "Bilgilerinizi sadece kargo ve fatura için kullanıyoruz, ödemeyi de kapıda yapıyorsunuz, önceden hiçbir ödeme yok 🙂" Buna rağmen vermiyorsa masajur.com/al adresini verebilirsin.
+- İstersen tek satır site seçeneği de sunabilirsin: "Dilerseniz masajur.com/al üzerinden kendiniz de verebilirsiniz." Bundan başka link YAZMA.
+
+KAPANIŞ (üç bilgi tamam olunca):
+"Teşekkür ederim, bilgilerinizi aldım 🙂 Siparişiniz onaylanmıştır. 1-3 iş günü içinde adresinizde olur, Yurtiçi Kargo ile teslim edilecektir."
+============================
+SİPARİŞ KAYIT İŞARETİ (SİSTEM - MÜŞTERİYE ASLA GÖSTERME)
+============================
+Sipariş bilgilerinin ÜÇÜ (ad soyad, telefon, açık adres) eline geçtiğinde, kapanış cevabının EN SONUNA şu satırı ekle:
+##SIPARIS##{"ad":"Ad Soyad","telefon":"05xx...","adres":"tam adres","eposta":"","not":""}##SON##
+- Bu satır SADECE sistem içindir. Sistem onu otomatik siler, müşteri görmez. Bu satır hakkında ASLA yorum yapma, müşteriye bahsetme, "kaydettim" gibi teknik şeyler yazma.
+- SADECE BİR KEZ ekle. Aynı sipariş için ikinci kez ASLA ekleme (müşteri sonradan teşekkür etse, soru sorsa bile).
+- Ad soyad, telefon veya açık adresten biri eksikse EKLEME. Önce eksiği tamamlat.
+- Adres yarım görünüyorsa (sadece il/ilçe yazılmışsa, mahalle veya bina no yoksa) EKLEME.
+- Müşteri sadece ürün sorusu soruyorsa, fiyat soruyorsa veya kararsızsa EKLEME.
+- JSON geçerli olmalı: çift tırnak kullan, satır sonu koyma, adresin tamamını tek satıra yaz.
+- eposta ve not alanları boşsa "" olarak bırak, alanı SİLME.
 `;
 
 // Kullanicinin (Facebook mesaj gonderen/yorum sahibi PSID) gecmisini cekip
@@ -639,6 +667,144 @@ function gecmiseOnbellekIsaretiKoy(messages) {
   return messages;
 }
 
+// ===========================================================================
+// 2026-10-12 EKLENDI: FACEBOOK DM'DEN SIPARIS ALMA
+// ===========================================================================
+// ESKIDEN: prompt'ta "Musteriden Facebook uzerinden adres/kart bilgisi
+// TOPLAMA, siteye/telefona yonlendir" yaziyordu. WhatsApp tarafinda ayni kural
+// 29.09'da kaldirildi (bot siparisi kendi aliyor) ama bu dosyada kaldi; yani
+// Facebook'dan yazan ve satin almak isteyen musteri baska bir kanala
+// gonderiliyordu ve buyuk olasilikla kayboluyordu.
+//
+// SIMDI: bot bilgileri burada topluyor. Uc bilgi (ad soyad + TELEFON + acik
+// adres) tamam olunca cevabinin sonuna ##SIPARIS##{json}##SON## isareti
+// koyuyor; siparisAyikla() isareti yakalayip MUSTERIYE GIDEN METINDEN SILIYOR,
+// siparisBildir() isletmenin iki WhatsApp numarasina bildirim atiyor ve
+// Sheets'teki "WhatsApp Siparişleri" sekmesine satir yaziyor (kanal alani
+// "Facebook" olarak). Apps Script tarafinda "siparis" dali zaten var,
+// orada DEGISIKLIK GEREKMIYOR.
+//
+// WHATSAPP'TAN FARKI: orada musterinin numarasi webhook ile zaten geliyordu.
+// Burada GELMIYOR, o yuzden prompt telefonu da istiyor.
+//
+// NOT: bildirim sablonu (temsilci_bildirim) govdesini 250 karaktere kirpiyor.
+// Uzun adreste bildirim mesaji kisalabilir - siparisin TAM hali her zaman
+// Sheets satirinda ve Vercel logunda duruyor.
+// ===========================================================================
+
+const SIPARIS_RE = /##SIPARIS##\s*([\s\S]*?)\s*##SON##/;
+const SIPARIS_KANALI = "Facebook";
+const SIPARIS_SHEETS_DENEME = 2;
+const SIPARIS_SHEETS_ZA_MS = 12000;
+const SIPARIS_TEKRAR_TTL = 86400; // ayni siparis 24 saat icinde iki kez bildirilmez
+
+function tekSatir_(d) {
+  return String(d == null ? "" : d).replace(/\s+/g, " ").trim();
+}
+
+function siparisParmakIzi_(s) {
+  return [tekSatir_(s.ad), tekSatir_(s.telefon), tekSatir_(s.adres)]
+    .join("|")
+    .toLocaleLowerCase("tr")
+    .replace(/[^a-z0-9|]/g, "")
+    .slice(0, 60) || "yok";
+}
+
+// Isareti yakala, musteriye giden metinden temizle. JSON bozuksa siparisi
+// DUSURMEYIZ - ham metni not olarak gecirip elle kontrol istiyoruz.
+function siparisAyikla(metin) {
+  const ham = String(metin || "");
+  const m = ham.match(SIPARIS_RE);
+  let siparis = null;
+  if (m) {
+    try {
+      siparis = JSON.parse(m[1]);
+    } catch (e) {
+      console.error("FB SIPARIS: JSON cozulemedi, ham metinle bildirilecek:", String(m[1]).slice(0, 300));
+      siparis = {
+        ad: "", telefon: "", adres: "", eposta: "",
+        not: "BOZUK KAYIT - ELLE KONTROL EDIN: " + String(m[1]).slice(0, 600)
+      };
+    }
+  }
+  let temiz = ham.replace(SIPARIS_RE, "");
+  temiz = temiz.replace(/##SIPARIS##[\s\S]*$/, "");
+  temiz = temiz.replace(/##SON##/g, "");
+  temiz = temiz.replace(/\n{3,}/g, "\n\n").trim();
+  return { temiz: temiz, siparis: siparis };
+}
+
+function siparisOzeti_(s) {
+  const p = [
+    "Ad: " + (tekSatir_(s.ad) || "-"),
+    "Tel: " + (tekSatir_(s.telefon) || "-"),
+    "Adres: " + (tekSatir_(s.adres) || "-")
+  ];
+  if (tekSatir_(s.eposta)) p.push("E-posta: " + tekSatir_(s.eposta));
+  if (tekSatir_(s.not)) p.push("Not: " + tekSatir_(s.not));
+  return p.join(" | ");
+}
+
+async function siparisSheetsLogla_(s, durum) {
+  if (!process.env.SHEETS_URL) {
+    console.error("FB SIPARIS: SHEETS_URL yok, satir yazilamadi");
+    return;
+  }
+  const kayitId = "sip_" + siparisParmakIzi_(s) + "_" +
+    String(durum || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 24);
+  const govde = JSON.stringify({
+    type: "siparis",
+    id: kayitId,
+    ad: tekSatir_(s.ad),
+    telefon: tekSatir_(s.telefon),
+    adres: tekSatir_(s.adres),
+    eposta: tekSatir_(s.eposta),
+    not: tekSatir_(s.not),
+    kanal: SIPARIS_KANALI,
+    durum: String(durum || "")
+  });
+  for (let deneme = 1; deneme <= SIPARIS_SHEETS_DENEME; deneme++) {
+    try {
+      const resp = await fetchWithTimeout(process.env.SHEETS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: govde
+      }, SIPARIS_SHEETS_ZA_MS);
+      const metin = await resp.text().catch(() => "");
+      console.log("FB SIPARIS SHEETS (deneme " + deneme + "):", resp.status, metin.slice(0, 160));
+      if (resp.ok) return;
+    } catch (e) {
+      console.error("FB SIPARIS SHEETS HATA (deneme " + deneme + "):", e && e.message ? e.message : e);
+    }
+  }
+}
+
+// Isletmeye bildir + Sheets'e yaz. Ayni siparis 24 saat icinde tekrar gelirse
+// (webhook yeniden teslimi, musterinin bilgileri tekrar yazmasi) atlanir.
+async function siparisBildir(s) {
+  const ozet = siparisOzeti_(s);
+  // TAM hali her zaman logda kalsin - sablon govdesi kirpilabiliyor.
+  console.log("FB YENI SIPARIS:", ozet);
+
+  const kilit = "fb-siparis:" + siparisParmakIzi_(s);
+  let yeni = true;
+  try {
+    const sonuc = await redis.set(kilit, "1", { nx: true, ex: SIPARIS_TEKRAR_TTL });
+    yeni = sonuc !== null;
+  } catch (e) {
+    console.error("FB SIPARIS: kilit hatasi, guvenli taraf - bildirilecek:", e && e.message ? e.message : e);
+  }
+  if (!yeni) {
+    console.log("FB SIPARIS: ayni siparis 24 saat icinde zaten bildirildi, atlandi");
+    return;
+  }
+
+  for (let i = 0; i < ALERT_NUMBERS.length; i++) {
+    await sendAlertTo(ALERT_NUMBERS[i], SIPARIS_KANALI + " SIPARIS", ozet);
+  }
+  await siparisSheetsLogla_(s, "BILDIRILDI");
+}
+
 async function kullaniciyaCevapUret(psid, kullaniciMesaji) {
   const history = await getHistory(psid);
 
@@ -658,7 +824,7 @@ async function kullaniciyaCevapUret(psid, kullaniciMesaji) {
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 400,
+      max_tokens: 700,
       system: [
         {
           type: "text",
@@ -686,8 +852,20 @@ async function kullaniciyaCevapUret(psid, kullaniciMesaji) {
     "yeni-giris=" + (k.input_tokens || 0),
     "cikis=" + (k.output_tokens || 0));
 
-  const cevap = data.content?.[0]?.text || null;
+  const hamCevap = data.content?.[0]?.text || null;
+  if (!hamCevap) return null;
 
+  // SIPARIS: bot isaret biraktiysa yakala ve musteriye giden metinden sil.
+  // Bilerek "await" ediyoruz: Vercel cevap dondukten sonra basla
+  // yan isleri oldurebilir, siparis kaybolur.
+  const ayirma = siparisAyikla(hamCevap);
+  const cevap = ayirma.temiz;
+  if (ayirma.siparis) {
+    await siparisBildir(ayirma.siparis);
+  }
+
+  // Gecmise TEMIZ metni yaziyoruz - isaret gecmiste kalirsa bot onu
+  // sonraki cevaplarinda tekrarlayabilir.
   if (cevap) {
     history.push({ role: "user", content: kullaniciMesaji });
     history.push({ role: "assistant", content: cevap });
