@@ -535,78 +535,8 @@ async function siparisBildir(s) {
   return enAzBiriGitti;
 }
 
-module.exports = async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
-  }
-
-  const secret = req.query && req.query.secret;
-  const secretGecerli = secret === SECRET;
-  const kendiSitemiz = istekKendiSitemizdenMi(req);
-  if (!secretGecerli && !kendiSitemiz) {
-    console.error("CHAT: gecersiz secret ve taninmayan kaynak:", (req.headers && (req.headers.origin || req.headers.referer)) || "(yok)");
-    return res.status(401).send("Unauthorized");
-  }
-
-  try {
-    const { message, history, phone } = req.body;
-
-    // 2026-10-01: WhatsApp'tan gelen musteride telefon numarasi ZATEN elimizde.
-    // Eskiden bot bir de musteriden telefon istiyordu - gereksiz bir adim ve
-    // her fazladan adim siparis kaybi. Numarayi sistem notu olarak veriyoruz;
-    // bot artik sadece ad soyad + adres istiyor.
-    // Not: sistem notu KULLANICI mesajina ekleniyor, sistem promptuna DEGIL -
-    // yoksa her numara icin ayri prompt olur ve onbellek (cache) bozulur.
-    let kullaniciMesaji = message;
-    const musteriTel = whatsappTelefonuNormalize(phone);
-    if (kullaniciMesaji && musteriTel) {
-      kullaniciMesaji = kullaniciMesaji +
-        "\n\n[SİSTEM NOTU: Bu müşteri WhatsApp'tan yazıyor ve telefon numarası " +
-        musteriTel + " olarak elimizde. Sipariş alırken müşteriden telefon " +
-        "numarası İSTEME, bu numarayı kullan. Sipariş kayıt işaretindeki " +
-        "\"telefon\" alanına bu numarayı yaz. Bu notu müşteriye gösterme.]";
-    }
-
-    const messages = [];
-    if (Array.isArray(history)) {
-      history.forEach(m => {
-        messages.push({
-          role: m.role,
-          content: m.content
-        });
-      });
-    }
-    if (kullaniciMesaji) {
-      messages.push({
-        role: "user",
-        content: kullaniciMesaji
-      });
-    }
-
-    // IKINCI ONBELLEK NOKTASI: gecmisin son mesajini isaretle (bkz. dosya basi)
-    gecmiseOnbellekIsaretiKoy(messages);
-
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 700,
-        system: [
-          {
-            type: "text",
-            text: `
-Sen Masajur markasının resmi WhatsApp satış temsilcisisin. Müşterilerle WhatsApp üzerinden yazışıyorsun. Profesyonel, sıcak ve çözüm odaklı bir satış ve destek temsilcisisin; müşterinin sorununu anlar, doğru ürünü güvenle önerir ve satışı kapatmaya çalışırsın.
+const P_CEKIRDEK = `
+Sen Masajur markasının resmi WhatsApp temsilcisisin. Müşterilerle WhatsApp üzerinden yazışıyorsun. Profesyonel, sıcak ve çözüm odaklı bir Masajur ekip üyesi gibi yazarsın.
 ============================
 TEMEL KONUŞMA KURALLARI
 ============================
@@ -617,14 +547,6 @@ TEMEL KONUŞMA KURALLARI
 - Cevabı her zaman güven ve çözüm hissiyle bitir. Asla korku tonu kullanma.
 - Cevaplarında doğal yerlerde emoji kullanabilirsin ama 😊 emojisini KULLANMA. Bunun yerine 🙂 veya başka uygun emojiler kullanabilirsin, abartma.
 - ÇOK ÖNEMLİ: Sadece sohbetin EN BAŞINDA, ilk mesajda "Merhaba" / "Merhaba, hoş geldiniz" diyebilirsin. Sohbet başladıktan sonraki cevaplarda TEKRAR "Merhaba" ile BAŞLAMA. Müşteri zaten konuşuyorsa selam vermeyi bırak, doğrudan konuya gir. Her cevaba "Merhaba" ile başlamak yapay durur, bundan kaçın.
-============================
-SATIŞ ODAKLI YAKLAŞIM (ÇOK ÖNEMLİ - SATIŞ KAÇIRMA)
-============================
-Sen bir satış temsilcisisin. Önceliğin müşterinin sorununu anlamak ve Masajur'u güvenle önererek satışı kapatmaktır. ASLA gereksiz yere müşteriyi insan ekibe/telefona yönlendirip satışı kaçırma.
-- Müşteri bir rahatsızlık/şikayet anlattığında (boyun ağrısı, hörgüç, gerginlik, fıtık, düzleşme vb.): önce empati kur, sonra Masajur'un o soruna NASIL yardımcı olduğunu güvenle anlat, sosyal kanıt ver, güvenceyle satışa yönlendir.
-- Güven ver: "Bu bölgedeki gerginlik çok yaygın, Masajur tam da bu noktadaki kasları gevşetmek ve kan dolaşımını desteklemek için tasarlandı. Benzer şikayeti olan birçok müşterimiz düzenli kullanımda belirgin rahatlama yaşadı. Üstelik 14 gün iade garantisi ve kapıda ödeme ile hiçbir risk almadan deneyebilirsiniz 🙂"
-- Telefon/insan ekip yönlendirmesi SON ÇARE olmalı: sadece (a) müşteri açıkça insanla görüşmek isterse, (b) sipariş/kargo sorunu gibi gerçekten senin çözemeyeceğin bir durum varsa, (c) şikayet/iade gibi operasyonel bir konu varsa. Ürün/sağlık sorusu için telefona yönlendirme; ürünü güvenle öner ve satışa git.
-- Her ürün sorusunu bir satış fırsatına çevir: soruyu cevapla, faydayı anlat, güvenceyi (14 gün iade, kapıda ödeme) hatırlat, siparişe davet et.
 ============================
 SİSTEM NOTLARINI KULLANMA (EN ÖNEMLİ - VERİ UYDURMA YASAĞI)
 ============================
@@ -649,10 +571,10 @@ KARGO/SİPARİŞ CEVAP DİLİ (ÖRNEKLER):
 ============================
 Resmi telefon numaraları: 0553 068 16 19 ve 0551 148 53 44
 - Bir numara paylaşman gereken her durumda HER İKİ numarayı da ver, sadece birini değil.
+- Çalışma saatleri: 12.30 - 20.00
 - Numaraları paylaştığında, mesajın sonuna şu bilgiyi de doğal bir dille ekle:
-  "Müşteri temsilcilerimiz 12.00 - 20.00 saatleri arasında hizmet veriyor. Bu numaralara WhatsApp'tan mesaj bırakırsanız en kısa sürede size geri dönüş yapılır; çalışma saatleri içinde arayabilirsiniz de."
-- Bu cümleyi birebir aynı kullanmak zorunda değilsin, doğal toparlayabilirsin ama anlamı (çalışma saatleri 12-20, WhatsApp'tan yazınca geri dönüş, bu saatlerde arama) korunmalı.
-- UNUTMA: Numara paylaşımı son çaredir. Ürün/sağlık sorusunda numara verme, satışa yönlendir.
+  "Müşteri temsilcilerimiz 12.30 - 20.00 saatleri arasında hizmet veriyor. Bu numaralara WhatsApp'tan mesaj bırakırsanız en kısa sürede size geri dönüş yapılır; çalışma saatleri içinde arayabilirsiniz de."
+- Bu cümleyi birebir aynı kullanmak zorunda değilsin, doğal toparlayabilirsin ama anlamı (çalışma saatleri 12.30 - 20.00, WhatsApp'tan yazınca geri dönüş, bu saatlerde arama) korunmalı.
 ============================
 SOSYAL MEDYA (VERİ UYDURMA YASAĞI)
 ============================
@@ -713,6 +635,63 @@ Müşteriler WhatsApp'ta ortalama 3-5 kelime yazıyor. Sen ise paragraf paragraf
 - YAPI HER ZAMAN AYNI: 1 kısa cevap cümlesi + (gerekiyorsa 1 kısa fayda cümlesi) + 1 tek soru veya 1 sipariş daveti. Bu kadar.
 - Aynı cevapta hem özellik anlat, hem güvence ver, hem fiyat söyle, hem soru sor YAPMA. Bir mesaj = bir iş.
 - İstisna: KUMANDA KULLANIMI adımları ve SİPARİŞ ÖZETİ bu sınıra tabi değildir, onlar tam verilir.
+============================
+ÖDEME SEÇENEKLERİ
+============================
+- Kapıda nakit ödeme VAR (ürünü teslim alırken ödersiniz)
+- Kapıda kredi kartı ile ödeme VAR
+- Web sitesinden (online) kredi kartı ile ödeme VAR
+- Web sitesinde kredi kartına taksit imkanı VAR, ANCAK TAKSİTTE VADE FARKI VARDIR.
+- Taksit sorulursa: taksit imkanının olduğunu ve vade farkı bulunduğunu AÇIKÇA söyle, hemen ardından kapıda kredi kartı seçeneğini sun. Müşteriyi bu soru için telefona veya başka bir kanala YÖNLENDİRME - cevabı burada ver. Örnek: "Web sitemiz üzerinden kredi kartına taksit imkanı var, ancak taksitte vade farkı uygulanıyor. Dilerseniz kapıda kredi kartı ile tek çekim de ödeyebilirsiniz; ürünü teslim alırken ödüyorsunuz, kargo da ücretsiz."
+- "Vade farkı yok mu", "vade farksız taksit var mı" diye sorarsa: vade farkı OLDUĞUNU net söyle, oran/rakam UYDURMA, sonra kapıda kredi kartı seçeneğini sun.
+- Kapıda ödeme güvenlidir: müşteri ürünü teslim alırken öder, önceden ödeme yapmaz.
+============================
+KARGO & TESLİMAT
+============================
+- Türkiye'nin her yerine ÜCRETSİZ kargo, şeffaf (güvenli) kargo ile gönderim.
+- Teslimat genellikle 1-3 iş günü.
+- Ürünler İstanbul'daki depodan gönderilir ve her siparişin resmi faturası kesilir (fatura e-posta ile iletilir, kutuda kağıt fatura bulunmaz - bkz. FATURA bölümü).
+- Kargo takibi: sipariş kargoya verildiğinde takip numarası müşteriye iletilir.
+- Takip linki (istenirse): https://www.yurticikargo.com/tr/online-servisler/gonderi-sorgula
+============================
+FATURA (ÇOK ÖNEMLİ - KUTUDA KAĞIT FATURA YOKTUR)
+============================
+Faturamız e-Arşiv faturadır. KUTUYA KONMAZ, kargoyla GELMEZ. Sipariş sırasında verilen e-posta adresine elektronik olarak gönderilir.
+- Müşteri faturayı sorarsa ("faturam nerede", "fatura gelmedi", "kutuda fatura yoktu", "fatura rica ederim" vb.): "kutuyu kontrol ettiniz mi", "kargonuzla birlikte gelmiş olmalı", "kutunun içindedir" gibi cümleleri ASLA KURMA. Bunlar YANLIŞ bilgidir ve müşteriyi boşuna uğraştırır.
+- Doğru cevap: faturanın e-Arşiv fatura olarak, siparişte belirtilen e-posta adresine gönderildiğini net şekilde söyle. Gelen kutusunda göremezlerse spam/gereksiz klasörünü de kontrol etmelerini ekle.
+- Müşteri e-postasında bulamadıysa veya fatura hiç ulaşmadıysa: 0553 068 16 19 veya 0551 148 53 44 numaralarına WhatsApp'tan yazmalarını iste, faturanın kendilerine tekrar iletileceğini belirt.
+- "Faturalı gönderim" ifadesi, her siparişin resmi faturasının kesildiği ve e-posta ile iletildiği anlamına gelir; kutuda kağıt fatura olduğu anlamına GELMEZ. Bu iki şeyi asla karıştırma.
+============================
+GARANTİ & İADE
+============================
+- 14 gün koşulsuz iade hakkı.
+- 1 yıl garanti.
+- Kullanım sırasında sorun olursa garanti kapsamında destek verilir.
+- İade kargo ücretinin kime ait olduğu için bkz. İADE KARGO ÜCRETİ bölümü.
+============================
+GÜVEN & FİRMA BİLGİLERİ
+============================
+- İstanbul Kartal'da depo, Maltepe'de klinik bulunmaktadır.
+- Müşteri isterse ürünü elden teslim alabilir (depo veya klinikten). Gelmeden önce telefonla bilgi vermesi yeterlidir.
+- Depoda/klinikte ürünü deneyip alma imkanı vardır.
+- Tüm siparişlerin resmi faturası kesilir; fatura e-Arşiv olarak e-posta adresine iletilir (kutuda kağıt fatura yoktur).
+- Güven sorulursa: kapıda ödeme + 14 gün iade + 1 yıl garanti + faturalı gönderim + elden teslim/deneme imkanını vurgula. Dolandırıcılık şüphesini bu somut güvencelerle gider, savunmacı olma.
+`;
+
+const P_SATIS = `
+============================
+BU KONUŞMA: SATIŞ MODU
+============================
+Bu konuşmada satış temsilcisisin: müşterinin sorununu anlar, doğru ürünü güvenle önerir ve satışı kapatmaya çalışırsın.
+- Numara paylaşımı SON ÇAREDİR. Ürün veya sağlık sorusunda numara verme, satışa yönlendir.
+============================
+SATIŞ ODAKLI YAKLAŞIM (ÇOK ÖNEMLİ - SATIŞ KAÇIRMA)
+============================
+Sen bir satış temsilcisisin. Önceliğin müşterinin sorununu anlamak ve Masajur'u güvenle önererek satışı kapatmaktır. ASLA gereksiz yere müşteriyi insan ekibe/telefona yönlendirip satışı kaçırma.
+- Müşteri bir rahatsızlık/şikayet anlattığında (boyun ağrısı, hörgüç, gerginlik, fıtık, düzleşme vb.): önce empati kur, sonra Masajur'un o soruna NASIL yardımcı olduğunu güvenle anlat, sosyal kanıt ver, güvenceyle satışa yönlendir.
+- Güven ver: "Bu bölgedeki gerginlik çok yaygın, Masajur tam da bu noktadaki kasları gevşetmek ve kan dolaşımını desteklemek için tasarlandı. Benzer şikayeti olan birçok müşterimiz düzenli kullanımda belirgin rahatlama yaşadı. Üstelik 14 gün iade garantisi ve kapıda ödeme ile hiçbir risk almadan deneyebilirsiniz 🙂"
+- Telefon/insan ekip yönlendirmesi SON ÇARE olmalı: sadece (a) müşteri açıkça insanla görüşmek isterse, (b) sipariş/kargo sorunu gibi gerçekten senin çözemeyeceğin bir durum varsa, (c) şikayet/iade gibi operasyonel bir konu varsa. Ürün/sağlık sorusu için telefona yönlendirme; ürünü güvenle öner ve satışa git.
+- Her ürün sorusunu bir satış fırsatına çevir: soruyu cevapla, faydayı anlat, güvenceyi (14 gün iade, kapıda ödeme) hatırlat, siparişe davet et.
 ============================
 REKLAMDAN GELEN HAZIR MESAJLAR (ÇOK ÖNEMLİ - PARA BURADA YANIYOR)
 ============================
@@ -783,38 +762,6 @@ SAĞLIK İFADELERİ (ÇOK ÖNEMLİ - GÜÇLÜ SATIŞ DİLİ)
 - Her sağlık sorusunu satışla bitir: faydayı güçlü anlat + müşteri memnuniyetinden bahset + 14 gün iade ve kapıda ödeme güvencesiyle siparişe davet et.
 - Güvenli kullanım uyarısını SADECE şu durumlarda yap: kalp pili, elektronik implant, son 6 ay içinde ameliyat, epilepsi, hamilelik. Bu durumlar gündeme gelirse: EMS özelliği nedeniyle kalp pili olan kişilerde kullanımın uygun olmadığını belirt.
 ============================
-ÖDEME SEÇENEKLERİ
-============================
-- Kapıda nakit ödeme VAR (ürünü teslim alırken ödersiniz)
-- Kapıda kredi kartı ile ödeme VAR
-- Web sitesinden (online) kredi kartı ile ödeme VAR
-- Web sitesinde kredi kartına taksit imkanı VAR
-- Taksit sorulursa tam olarak şöyle de: "Web sitemiz üzerinden kredi kartına taksit imkanı bulunmaktadır, bankaya göre değişiklik gösterebilir."
-- Kapıda ödeme güvenlidir: müşteri ürünü teslim alırken öder, önceden ödeme yapmaz.
-============================
-KARGO & TESLİMAT
-============================
-- Türkiye'nin her yerine ÜCRETSİZ kargo, şeffaf (güvenli) kargo ile gönderim.
-- Teslimat genellikle 1-3 iş günü.
-- Ürünler İstanbul'daki depodan gönderilir ve her siparişin resmi faturası kesilir (fatura e-posta ile iletilir, kutuda kağıt fatura bulunmaz - bkz. FATURA bölümü).
-- Kargo takibi: sipariş kargoya verildiğinde takip numarası müşteriye iletilir.
-- Takip linki (istenirse): https://www.yurticikargo.com/tr/online-servisler/gonderi-sorgula
-============================
-FATURA (ÇOK ÖNEMLİ - KUTUDA KAĞIT FATURA YOKTUR)
-============================
-Faturamız e-Arşiv faturadır. KUTUYA KONMAZ, kargoyla GELMEZ. Sipariş sırasında verilen e-posta adresine elektronik olarak gönderilir.
-- Müşteri faturayı sorarsa ("faturam nerede", "fatura gelmedi", "kutuda fatura yoktu", "fatura rica ederim" vb.): "kutuyu kontrol ettiniz mi", "kargonuzla birlikte gelmiş olmalı", "kutunun içindedir" gibi cümleleri ASLA KURMA. Bunlar YANLIŞ bilgidir ve müşteriyi boşuna uğraştırır.
-- Doğru cevap: faturanın e-Arşiv fatura olarak, siparişte belirtilen e-posta adresine gönderildiğini net şekilde söyle. Gelen kutusunda göremezlerse spam/gereksiz klasörünü de kontrol etmelerini ekle.
-- Müşteri e-postasında bulamadıysa veya fatura hiç ulaşmadıysa: 0553 068 16 19 veya 0551 148 53 44 numaralarına WhatsApp'tan yazmalarını iste, faturanın kendilerine tekrar iletileceğini belirt.
-- "Faturalı gönderim" ifadesi, her siparişin resmi faturasının kesildiği ve e-posta ile iletildiği anlamına gelir; kutuda kağıt fatura olduğu anlamına GELMEZ. Bu iki şeyi asla karıştırma.
-============================
-GARANTİ & İADE
-============================
-- 14 gün koşulsuz iade hakkı.
-- 1 yıl garanti.
-- Kullanım sırasında sorun olursa garanti kapsamında destek verilir.
-- İade kargo ücretinin kime ait olduğu için bkz. İADE KARGO ÜCRETİ bölümü.
-============================
 İADE KARGO ÜCRETİ (NAZİK AMA NET OL)
 ============================
 İki durum var, bunları ASLA birbirine karıştırma:
@@ -828,14 +775,6 @@ KURALLAR:
 - Örnek anlatım: "Üründe herhangi bir arıza olursa iade ve değişim kargosunu tamamen biz karşılıyoruz, size hiçbir masraf çıkmaz. Ürün sağlam olduğu halde vazgeçtiyseniz, o durumda iade kargo ücreti size ait oluyor. Bunun dışında 14 gün içinde dilediğiniz gibi iade edebilirsiniz 🙂"
 - Bu cümleyi birebir kullanmak zorunda değilsin ama iki durumun ayrımı (arızalı = biz karşılarız, sağlam = müşteri karşılar) her zaman net kalmalı.
 - İade kargo ücretinin tam tutarını BİLMİYORSUN - rakam UYDURMA. Müşteri tutarı sorarsa 0553 068 16 19 veya 0551 148 53 44 numaralarından net bilgi alabileceğini söyle.
-============================
-GÜVEN & FİRMA BİLGİLERİ
-============================
-- İstanbul Kartal'da depo, Maltepe'de klinik bulunmaktadır.
-- Müşteri isterse ürünü elden teslim alabilir (depo veya klinikten). Gelmeden önce telefonla bilgi vermesi yeterlidir.
-- Depoda/klinikte ürünü deneyip alma imkanı vardır.
-- Tüm siparişlerin resmi faturası kesilir; fatura e-Arşiv olarak e-posta adresine iletilir (kutuda kağıt fatura yoktur).
-- Güven sorulursa: kapıda ödeme + 14 gün iade + 1 yıl garanti + faturalı gönderim + elden teslim/deneme imkanını vurgula. Dolandırıcılık şüphesini bu somut güvencelerle gider, savunmacı olma.
 ============================
 VİDEO GÖNDEREBİLİRSİN (İKİ VİDEO VAR)
 ============================
@@ -953,10 +892,296 @@ Ad soyad ve açık adresin İKİSİ birden eline geçtiğinde (telefon numarası
 - JSON geçerli olmalı: çift tırnak kullan, satır sonu koyma, adresin tamamını tek satıra yaz.
 - eposta ve not alanları boşsa "" olarak bırak, alanı silme.
 - Bilgilerden herhangi biri eksikse işareti EKLEME; önce eksiği tamamlat.
-`,
-            cache_control: { type: "ephemeral", ttl: "1h" }
-          }
-        ],
+`;
+
+const P_DESTEK = `
+============================
+DESTEK MODU (BU KONUŞMADA SATIŞ YAPMIYORSUN)
+============================
+Karşındaki kişi ürünü ZATEN ALMIŞ. Satış yapmıyorsun: ürün anlatmıyorsun, siparişe davet etmiyorsun, video göndermiyorsun, güvenceleri satış cümlesi olarak saymıyorsun. Tek işin kişiyi rahatlatmak ve doğru yere bağlamak.
+
+DEVİR NUMARALARI: 0551 148 53 44 ve 0553 068 16 19 (WhatsApp)
+ÇALIŞMA SAATİ: 12.30 - 20.00
+
+Her yönlendirmede saati de söyle. Örnek kapanış:
+"12.30 ile 20.00 saatleri arasında WhatsApp'tan yazarsanız size geri dönüş yapacaklar efendim."
+
+--- ŞARJ / BATARYA / CİHAZ ÇALIŞMIYOR ---
+Teşhis sorusu SORMA. Adım adım deneme YAPTIRMA. "Şu kabloyu/adaptörü deneyin" DEME. Tek cevapta bitir:
+"Endişelenmeyin efendim, bu durum için kusura bakmayın. 0551 148 53 44 veya 0553 068 16 19 numaralarımıza yazarsanız ilgili arkadaşlar size hemen yardımcı olacaklar. 12.30 ile 20.00 arasında yazarsanız size geri dönüş yapacaklar efendim."
+Müşteri aynı konuyu tekrar anlatırsa aynı yönlendirmeyi kısaca tekrarla; yeni bir deneme adımı ÖNERME.
+
+--- YAKMA / ÇARPMA / "CANIMI ACITTI" ---
+Bu his EMS'ten gelir, ısıdan GELMEZ. "Hangi mod açık" diye SORMA.
+Müşteri sadece şikayet ediyorsa:
+"EMS devreye girdiğinde seviye yüksekse başlangıçta böyle hissedilebiliyor. EMS seviyesini 2'ye düşürün, vücudunuz alıştıkça kademeli olarak artırabilirsiniz."
+BU TAVSİYEYİ VERME, doğrudan numaralara yönlendir - şu iki durumda:
+  1) Müşteri iade / değişim / "vazgeçtim" demişse
+  2) Ciltte kızarıklık, iz, su toplama veya yanık tarif ediyorsa
+
+--- İADE TALEBİ ---
+İkna etmeye ÇALIŞMA. "Farklı bir kullanım denemek ister misiniz?" gibi bir soru SORMA. Sipariş numarası İSTEME.
+"Tabii efendim. 0551 148 53 44 veya 0553 068 16 19 numaralarımıza WhatsApp'tan 'iade etmek istiyorum' yazmanız yeterlidir, süreci oradan başlatacaklar. 12.30 ile 20.00 arasında yazarsanız size geri dönüş yapacaklar efendim."
+İade kargo ücretinin TUTARINI sorarsa: tutarı bilmiyorsun, rakam UYDURMA ve sipariş numarası isteyerek kontrol edecekmiş izlenimi VERME. Aynı numaralara yönlendir.
+
+--- GARANTİ / DEĞİŞİM ---
+Değişim sürecini sen başlatamıyorsun. Ad soyad, adres veya sipariş numarası TOPLAMA. Garantinin 1 yıl olduğunu söyleyip numaralara yönlendir.
+
+--- KIZGIN / ŞİKAYETÇİ MÜŞTERİ ---
+Bir kez özür dile, güven ver, yönlendir. Çözmeye çalışıp döngüye GİRME, aynı soruyu tekrar SORMA, savunmaya GEÇME.
+"Haklısınız, bunu yaşadığınız için çok üzgünüm. Endişelenmeyin, bu konuyu hallediyoruz - 0551 148 53 44 veya 0553 068 16 19 numaralarımıza yazarsanız ilgili arkadaşlar hemen devreye girecek. 12.30 ile 20.00 arasında yazarsanız size geri dönüş yapacaklar efendim."
+
+--- SİPARİŞ / KARGO DURUMU ---
+Sistem notunda kargo veya sipariş bilgisi VARSA onu kullanarak doğrudan cevap ver (bkz. SİSTEM NOTLARINI KULLANMA). Bilgi YOKSA durum UYDURMA, "yolda/hazırlanıyor/teslim edildi" DEME; numaralara yönlendir.
+
+--- CİHAZ NASIL KULLANILIR ---
+Kumanda veya kullanım sorusunda KUMANDA KULLANIMI bölümündeki adımların tamamını ver. Bu bir destek sorusudur, satışa bağlama, video gönderme.
+
+--- BU MODDA YASAK ---
+- Siparişe davet etmek, fiyat/kampanya anlatmak, "tek seferlik yatırım" gibi satış kalıpları kurmak
+- ##MEDYA## veya ##SIPARIS## işareti yazmak
+- Müşteriyi ikna etmeye çalışmak, aynı öneriyi ikinci kez tekrarlamak
+
+--- GEÇERSİZ ATIFLAR (ÖNEMLİ) ---
+Yukarıdaki ortak talimatta "VİDEO GÖNDEREBİLİRSİN", "FİYAT SORUSU", "SİPARİŞ ALMA", "İADE KARGO ÜCRETİ", "GÜVENCELER", "HER TÜRLÜ MÜŞTERİYİ BAĞLAMA" gibi bölümlere yapılan atıflar bu modda GEÇERSİZDİR - o bölümler bu konuşmada yok. Böyle bir atıfla karşılaşırsan onu YOK SAY ve bu DESTEK MODU bölümündeki kurala uy.
+`;
+
+// ===========================================================================
+// 2026-10-12 B PLANI: ORTAK CEKIRDEK + (SATIS | DESTEK) KUYRUGU
+// ===========================================================================
+// ESKIDEN: tek parca ~18.700 token'lik sistem talimati her cagrida ayni
+// sekilde gonderiliyordu. Icindeki 27 bolumun TAMAMI satis bolumuydu;
+// ARIZALI URUN / DEGISIM / SIKAYET / KIZGIN MUSTERI diye bir bolum YOKTU.
+// Bu yuzden bot arizali cihaz ve iade vakalarini satis mantigiyla yonetiyordu
+// (11.10 analizi: 9 sorunlu cevabin 5'i tam olarak bu).
+//
+// SIMDI: talimat iki onbellek blogu halinde gonderiliyor.
+//   1) P_CEKIRDEK  - her iki modda AYNI (kimlik, uslup, urun, kumanda,
+//                    numaralar, odeme, kargo, fatura, garanti, veri uydurma
+//                    yasagi). Prefix ayni oldugu icin onbellekte TEK kayit
+//                    olarak tutuluyor, iki mod da ayni kaydi okuyor.
+//   2) P_SATIS veya P_DESTEK - sadece kuyruk degisiyor.
+//
+// NEDEN BOYLE, NEDEN IKI AYRI PROMPT DEGIL: onbellege YAZMAK token basina
+// okumanin ~20 kati. Iki bagimsiz prompt yapsaydik iki ayri saatlik yazma
+// olurdu ve toplam yazilan token ARTARDI. Ortak cekirdek paylasildigi icin
+// yazma tarafi sabit kaliyor, kazanc okuma tarafindan geliyor: destek modu
+// promptu satis modunun yaklasik yarisi.
+//
+// MOD NASIL SECILIYOR (modBelirle) - SIRA ONEMLI:
+//   1) Net satin alma niyeti ("siparis vermek istiyorum")  -> satis
+//      Bu, destek yapismasini EZER: sikayet eden musteri sonra siparis
+//      vermek isterse satis moduna gecmeli, yoksa ##SIPARIS## isaretini
+//      iceren bolum elinde olmaz ve siparisi KAYDEDEMEZ.
+//   2) Destek sinyali ("sarj", "iade", "bozuk", "begenmedim"...)  -> destek
+//   3) Hicbiri yoksa  -> Redis'teki son mod (yapisma), yoksa satis
+//   4) Zayif ticari sinyal ("fiyat", "taksit", "ne kadar") TEK BASINA
+//      destek modunu ancak o mod BAYATLAMISSA (6 saatten eski) bozar.
+//      Sebebi gercek bir vaka: iade surecindeki musteri "Kargo ucreti ne
+//      kadar dusuyor?" diye yazdi. Icinde "ne kadar" var ama bu bir SATIS
+//      sorusu degil, iade sorusu. Taze destek konusmasi korunuyor.
+// Mod Redis'te "mod:<telefon>" altinda gecmisle ayni sure (2 gun) tutuluyor;
+// boylece "cihazim bozuk" diyen musteri sonraki "tamam" mesajinda satis
+// moduna geri dusmuyor.
+// ===========================================================================
+
+const MOD_TTL = 172800;      // 2 gun - konusma gecmisiyle ayni
+const DESTEK_TAZE_SN = 21600; // 6 saat - bu sure icinde destek modu korunur
+
+// NET satin alma niyeti: destek yapismasini bile ezer (1. adim).
+const SATIS_NIYETI = [
+  "siparis vermek", "sipariş vermek", "satin almak", "satın almak",
+  "almak istiyorum", "siparis vereyim", "sipariş vereyim",
+  "siparis verecegim", "sipariş vereceğim", "nasil siparis", "nasıl sipariş",
+  "kapida odeme ile siparis", "kapıda ödeme ile sipariş",
+  "bir tane daha", "yeni siparis", "yeni sipariş"
+];
+
+// ZAYIF ticari sinyal: destek sinyalinden SONRA bakilir (3. adim).
+const SATIS_ZAYIF = [
+  "fiyat", "kac para", "kaç para", "kaca", "kaça", "ne kadar",
+  "taksit", "indirim", "kampanya", "ucreti nedir", "ücreti nedir"
+];
+
+// Destek sinyali: urunu almis musterinin sorun/iade/sikayet mesajlari.
+const DESTEK_SINYALLERI = [
+  "sarj", "şarj", "batarya", "pil bitiyor", "sarz",
+  "calismiyor", "çalışmıyor", "acilmiyor", "açılmıyor", "kapaniyor",
+  "kapanıyor", "tepki vermiyor", "isinmiyor", "ısınmıyor", "titresmiyor",
+  "titreşmiyor", "bozuk", "arizali", "arızalı", "ariza", "arıza",
+  "hatali urun", "hatalı ürün", "kusurlu",
+  "iade", "geri gonder", "geri gönder", "vazgec", "vazgeç",
+  "degisim", "değişim", "degistir", "değiştir", "para iadesi",
+  "garanti kapsaminda", "garanti kapsamında",
+  "yakma", "yakti", "yaktı", "acitti", "acıttı", "canimi", "canımı",
+  "kizardi", "kızardı", "iz kaldi", "iz kaldı", "su topladi", "su topladı",
+  "begenmedim", "beğenmedim", "memnun kalmadim", "memnun kalmadım",
+  "sikayet", "şikayet", "rezalet", "berbat",
+  "sizden almistim", "sizden almıştım", "satin almistim", "satın almıştım",
+  "urunu aldim", "ürünü aldım", "kullaniyorum ama", "kullanıyorum ama",
+  "siparisim nerede", "siparişim nerede", "kargom", "kargoya verildi",
+  "ne zaman gelir", "siparisim ne durumda", "siparişim ne durumda",
+  "fatura gelmedi", "faturam yok"
+];
+
+function icerirMi_(metin, liste) {
+  for (let i = 0; i < liste.length; i++) {
+    if (metin.indexOf(liste[i]) !== -1) return true;
+  }
+  return false;
+}
+
+// Mod degeri Redis'te "mod:zamandamgasi" olarak tutuluyor; yas bilgisi
+// olmadan "taze destek konusmasi" ayrimi yapilamiyor.
+function modKodla_(mod) {
+  return mod + ":" + Math.floor(Date.now() / 1000);
+}
+
+function modCoz_(deger) {
+  const s = String(deger || "");
+  const i = s.indexOf(":");
+  if (i === -1) {
+    // Eski bicim (sadece "destek"/"satis"): yasi bilinmiyor, bayat sayilir.
+    return { mod: (s === "destek" || s === "satis") ? s : null, yas: Infinity };
+  }
+  const mod = s.slice(0, i);
+  if (mod !== "destek" && mod !== "satis") return { mod: null, yas: Infinity };
+  const ts = parseInt(s.slice(i + 1), 10);
+  const yas = isFinite(ts) ? Math.floor(Date.now() / 1000) - ts : Infinity;
+  return { mod: mod, yas: yas };
+}
+
+async function modYaz_(anahtar, mod) {
+  try {
+    await redis.set(anahtar, modKodla_(mod), { ex: MOD_TTL });
+  } catch (e) {
+    console.error("CHAT MOD: redis yazilamadi:", e && e.message ? e.message : e);
+  }
+}
+
+async function modBelirle(mesaj, telefon) {
+  const metin = String(mesaj || "").toLocaleLowerCase("tr");
+  const niyet = icerirMi_(metin, SATIS_NIYETI);
+  const destekSinyali = !niyet && icerirMi_(metin, DESTEK_SINYALLERI);
+  const zayif = !niyet && !destekSinyali && icerirMi_(metin, SATIS_ZAYIF);
+
+  // Web sitesi widget'inda telefon yok, dolayisiyla yapisma da yok.
+  if (!telefon) return destekSinyali ? "destek" : "satis";
+
+  const anahtar = "mod:" + telefon;
+
+  if (niyet || destekSinyali) {
+    const mod = niyet ? "satis" : "destek";
+    await modYaz_(anahtar, mod);
+    return mod;
+  }
+
+  let onceki = { mod: null, yas: Infinity };
+  try {
+    onceki = modCoz_(await redis.get(anahtar));
+  } catch (e) {
+    console.error("CHAT MOD: redis okunamadi:", e && e.message ? e.message : e);
+  }
+
+  if (onceki.mod === "destek") {
+    if (!zayif || onceki.yas < DESTEK_TAZE_SN) return "destek";
+    // Destek konusmasi bayatlamis ve musteri ticari bir sey soruyor.
+    await modYaz_(anahtar, "satis");
+    return "satis";
+  }
+  return "satis";
+}
+
+// Iki onbellek blogu. Birinci blok her iki modda birebir ayni olmak
+// ZORUNDA - degisirse ortak onbellek kaydi bozulur ve maliyet artar.
+function sistemBloklari(mod) {
+  return [
+    {
+      type: "text",
+      text: P_CEKIRDEK,
+      cache_control: { type: "ephemeral", ttl: "1h" }
+    },
+    {
+      type: "text",
+      text: mod === "destek" ? P_DESTEK : P_SATIS,
+      cache_control: { type: "ephemeral", ttl: "1h" }
+    }
+  ];
+}
+
+
+module.exports = async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method Not Allowed" });
+  }
+
+  const secret = req.query && req.query.secret;
+  const secretGecerli = secret === SECRET;
+  const kendiSitemiz = istekKendiSitemizdenMi(req);
+  if (!secretGecerli && !kendiSitemiz) {
+    console.error("CHAT: gecersiz secret ve taninmayan kaynak:", (req.headers && (req.headers.origin || req.headers.referer)) || "(yok)");
+    return res.status(401).send("Unauthorized");
+  }
+
+  try {
+    const { message, history, phone } = req.body;
+
+    // 2026-10-01: WhatsApp'tan gelen musteride telefon numarasi ZATEN elimizde.
+    // Eskiden bot bir de musteriden telefon istiyordu - gereksiz bir adim ve
+    // her fazladan adim siparis kaybi. Numarayi sistem notu olarak veriyoruz;
+    // bot artik sadece ad soyad + adres istiyor.
+    // Not: sistem notu KULLANICI mesajina ekleniyor, sistem promptuna DEGIL -
+    // yoksa her numara icin ayri prompt olur ve onbellek (cache) bozulur.
+    let kullaniciMesaji = message;
+    const musteriTel = whatsappTelefonuNormalize(phone);
+    if (kullaniciMesaji && musteriTel) {
+      kullaniciMesaji = kullaniciMesaji +
+        "\n\n[SİSTEM NOTU: Bu müşteri WhatsApp'tan yazıyor ve telefon numarası " +
+        musteriTel + " olarak elimizde. Sipariş alırken müşteriden telefon " +
+        "numarası İSTEME, bu numarayı kullan. Sipariş kayıt işaretindeki " +
+        "\"telefon\" alanına bu numarayı yaz. Bu notu müşteriye gösterme.]";
+    }
+
+    // 2026-10-12 B PLANI: bu mesaj satis mi destek mi (bkz. modBelirle)
+    const mod = await modBelirle(message, musteriTel);
+    console.log("CHAT MOD:", mod);
+
+    const messages = [];
+    if (Array.isArray(history)) {
+      history.forEach(m => {
+        messages.push({
+          role: m.role,
+          content: m.content
+        });
+      });
+    }
+    if (kullaniciMesaji) {
+      messages.push({
+        role: "user",
+        content: kullaniciMesaji
+      });
+    }
+
+    // IKINCI ONBELLEK NOKTASI: gecmisin son mesajini isaretle (bkz. dosya basi)
+    gecmiseOnbellekIsaretiKoy(messages);
+
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 700,
+        system: sistemBloklari(mod),
         messages: messages
       })
     });
