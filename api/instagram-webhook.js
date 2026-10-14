@@ -469,6 +469,12 @@ Resmi telefon numaraları: 0553 068 16 19 ve 0551 148 53 44
   "Müşteri temsilcilerimiz 12.30 - 20.00 saatleri arasında hizmet veriyor. Bu numaralara WhatsApp'tan mesaj bırakırsanız en kısa sürede size geri dönüş yapılır; çalışma saatleri içinde arayabilirsiniz de."
 - Bu cümleyi birebir aynı kullanmak zorunda değilsin, doğal toparlayabilirsin ama anlamı (çalışma saatleri 12.30 - 20.00, WhatsApp'tan yazınca geri dönüş, bu saatlerde arama) korunmalı.
 ============================
+YAPAMADIĞIN İŞİ YAPTIĞINI SÖYLEME (ÇOK ÖNEMLİ)
+============================
+- Sorgu çalıştırma, kayıt açma, talep oluşturma, ekibe iş iletme, süreç başlatma yetkin YOK. Şu cümleler YASAK: "kontrol ettim", "sistemde arattım", "baktım", "ekibimize ilettim", "talebinizi oluşturdum", "not düştüm", "takibe aldım", "ekip sizinle iletişime geçecek". Hiçbirini yapamıyorsun; söylersen müşteri boşuna bekler ve ikinci kez kızgın döner.
+- Çözemediğin konuda dürüst ol ve yönlendir: "Bu konuyu ekibimiz çözebilir, 0553 068 16 19 veya 0551 148 53 44 numaralarımıza yazarsanız ilgilenecekler."
+- Müşterinin yazdığı bir SAYIYI sipariş numarası SANMA. O sayı para tutarı, gün sayısı veya adet olabilir. Emin değilsen "sipariş numaranız bu mu?" diye TEYİT ET; o numarayla sorgu yapmış gibi konuşma.
+============================
 SOSYAL MEDYA (VERİ UYDURMA YASAĞI)
 ============================
 - Instagram hesabımız: instagram.com/masajurcom (kullanıcı adı: masajurcom). Müşteri Instagram adresimizi sorarsa SADECE bunu ver. Başka bir kullanıcı adı ASLA UYDURMA.
@@ -702,10 +708,17 @@ function gecmiseOnbellekIsaretiKoy(messages) {
 // Sheets satirinda ve Vercel logunda duruyor.
 // ===========================================================================
 
-// Yasakli emojiyi musteriye gitmeden once duzeltir. Prompt kurali degil,
-// kod kurali: prompt tarafi iki ayri olcumde tutmadi (11.10 analizi + canli test).
-function emojiDuzelt(metin) {
-  return String(metin || "").replace(/\u{1F60A}/gu, "\u{1F642}");
+// Musteriye gitmeden once bicim temizligi. Bunlarin hepsi promptta ZATEN
+// yasak ama model kurallari tekrar tekrar cigniyor (😊 icin 11.10 analizi +
+// 12.10 canli test, markdown yildizi icin 13.10 analizi). Iki kez tutmayan
+// prompt kurali koda alinir.
+function metniTemizle(metin) {
+  let s = String(metin || "");
+  s = s.replace(/\u{1F60A}/gu, "\u{1F642}");   // 😊 -> 🙂
+  s = s.replace(/^[ \t]*\*[ \t]+/gm, "");      // "* madde" madde isareti
+  s = s.replace(/\*\*([\s\S]+?)\*\*/g, "$1"); // **kalin**
+  s = s.replace(/\*([^*\n]+)\*/g, "$1");       // *kalin*
+  return s;
 }
 
 const SIPARIS_RE = /##SIPARIS##\s*([\s\S]*?)\s*##SON##/;
@@ -875,7 +888,7 @@ async function kullaniciyaCevapUret(igUserId, kullaniciMesaji) {
   // Bilerek "await" ediyoruz: Vercel cevap dondukten sonra basla
   // yan isleri oldurebilir, siparis kaybolur.
   const ayirma = siparisAyikla(hamCevap);
-  const cevap = emojiDuzelt(ayirma.temiz);
+  const cevap = metniTemizle(ayirma.temiz);
   if (ayirma.siparis) {
     await siparisBildir(ayirma.siparis);
   }
