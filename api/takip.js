@@ -118,7 +118,7 @@ const ASAMA1_METIN =
   "var, memnun kalmazsanız gönül rahatlığıyla iade edebilirsiniz. Cihaz " +
   "1 yıl garantili.\n\n" +
   "Dilerseniz ad soyad ve açık adresinizi buraya yazın, siparişinizi ben " +
-  "oluşturayım.";
+  "oluşturayım. Ya da masajur.com/al adresinden kendiniz de verebilirsiniz.";
 
 async function fetchWithTimeout(url, options, ms) {
   const controller = new AbortController();
