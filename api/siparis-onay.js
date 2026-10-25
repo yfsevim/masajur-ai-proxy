@@ -29,7 +29,9 @@ const redis = Redis.fromEnv();
 
 const SECRET = "masajur_yakkoholding_2128";
 
-const TEMPLATE = "siparis_alindi";
+// 2026-10-25: "siparis_alindi" ve "siparis_alindi_v2" ayni anda
+// incelemeye girdi; once v2 onaylandi, onu kullaniyoruz.
+const TEMPLATE = "siparis_alindi_v2";
 const TEMPLATE_LANG = "tr";
 
 // Ayni siparis icin ikinci kez mesaj gitmesin. Shopify webhook'u
