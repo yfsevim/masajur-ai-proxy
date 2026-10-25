@@ -557,10 +557,47 @@ async function handleTest(req, res) {
   }
 }
 
+// ============ TEST YARDIMCISI: VIDEO KILIDINI SIFIRLA ============
+// GET ?mod=video-sifirla&telefon=905...&secret=...
+// Bir numaranin video kilitlerini ve sohbet hafizasini siler, boylece o
+// numara bota tekrar yazdiginda konusma SIFIRDAN baslar ve video yeniden
+// gider. Sadece test icin - musteri akisini etkilemez.
+async function handleVideoSifirla(req, res) {
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) return res.status(401).send("Unauthorized");
+
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+
+  const ham = String((req.query && req.query.telefon) || "").replace(/\D/g, "");
+  if (!ham) return res.status(200).send("telefon parametresi gerekli. Ornek: ?mod=video-sifirla&telefon=905551112233&secret=...");
+
+  try {
+    const silinen = [];
+    for (const anahtar of ["tanitim", "fizyoterapist"]) {
+      await redis.del("medya-gonderildi:" + ham + ":" + anahtar);
+      silinen.push(anahtar);
+    }
+    await redis.del(GECMIS + ham);
+    return res.status(200).send(
+      "SIFIRLANDI: " + ham + "\n" +
+      "  video kilitleri : " + silinen.join(", ") + "\n" +
+      "  sohbet hafizasi : silindi\n\n" +
+      "Bu numara bota tekrar yazdiginda konusma sifirdan baslar,\n" +
+      "ilk cevapta video yeniden gider.\n"
+    );
+  } catch (e) {
+    return res.status(200).send("HATA: " + (e && e.message ? e.message : e));
+  }
+}
+
 // ============ GERCEK CALISMA ============
 module.exports = async (req, res) => {
   if (req.method === "GET" && req.query && req.query.mod === "test") {
     return handleTest(req, res);
+  }
+
+  if (req.method === "GET" && req.query && req.query.mod === "video-sifirla") {
+    return handleVideoSifirla(req, res);
   }
 
   if (req.method !== "POST") return res.status(200).send("OK");

@@ -434,7 +434,12 @@ function tekrarVideoIstegiMi(mesaj) {
 // Bu numaraya bu video bu sohbette BASARIYLA gonderildi mi?
 // Not: isaret SADECE basarili gonderimden SONRA birakiliyor. Basarisiz
 // gonderim hicbir seyi kilitlemiyor - eski hata tam buydu.
-const MEDYA_SOHBET_TTL = 21600; // 6 saat ~ bir sohbet oturumu
+// 2026-10-25: Eskiden 6 saatti. Artik konusma hafizasiyla AYNI omur
+// (HISTORY_TTL = 2 gun). Boylece kilit tam olarak "bu konusma boyunca"
+// gecerli oluyor: hafiza dustugunde (yeni konusma) kilit de siliniyor,
+// video yeniden gidiyor. 6 saatlik sabit sure hem konusma ortasinda
+// kilidi dusuruyordu hem de yeni konusmayi videosuz birakiyordu.
+const MEDYA_SOHBET_TTL = HISTORY_TTL; // 2 gun - konusma hafizasiyla ayni
 
 function medyaIsaretAnahtari(phone, anahtar) {
   return "medya-gonderildi:" + phone + ":" + anahtar;
@@ -449,6 +454,19 @@ async function medyaZatenGittiMi(phone, anahtar) {
     // tekrar eden videodan daha kotu.
     console.error("MEDYA ISARET OKUNAMADI, gonderime devam:", e && e.message ? e.message : e);
     return false;
+  }
+}
+
+// Yeni konusma basladiginda cagriliyor: bu numaranin tum video kilitlerini
+// siler, boylece yeni konusmanin ilk cevabinda video tekrar gider.
+async function medyaIsaretleriniSil(phone) {
+  try {
+    for (const anahtar of Object.keys(MEDYA)) {
+      await redis.del(medyaIsaretAnahtari(phone, anahtar));
+    }
+    console.log("MEDYA KILITLERI SIFIRLANDI (yeni konusma):", phone);
+  } catch (e) {
+    console.error("MEDYA KILITLERI SILINEMEDI:", e && e.message ? e.message : e);
   }
 }
 
@@ -677,6 +695,14 @@ module.exports = async (req, res) => {
     // Bu musterinin gecmis konusmasini Redis'ten cek
     const history = await getHistory(phone);
     console.log("HAFIZA UZUNLUGU:", history.length);
+
+    // 2026-10-25: Gecmis bossa bu YENI bir konusma (musteri uzun suredir
+    // yazmiyordu, hafiza dustu). Video kilitlerini sifirliyoruz ki yeni
+    // konusmanin ilk cevabinda video YINE gitsin. Kilit sadece ayni
+    // konusma icinde tekrari engelliyor.
+    if (history.length === 0) {
+      await medyaIsaretleriniSil(phone);
+    }
 
     // ---------------------------------------------------------
     // SIPARIS + KARGO SORGUSU
