@@ -472,10 +472,26 @@ async function handleTest(req, res) {
 
   try {
     const adaylar = await adaylariGetir();
+
+    // Kuyrugun TAMAMI (suresi dolmamislar dahil). Boylece bota yeni yazilan
+    // bir numaranin kuyruga dustugu 3,5 saat beklemeden gorulebiliyor.
+    let tumKuyruk = [];
+    try {
+      const duz = await redis.zrange(KUYRUK, 0, -1, { withScores: true });
+      if (Array.isArray(duz)) {
+        for (let i = 0; i < duz.length; i += 2) {
+          tumKuyruk.push({ telefon: String(duz[i]), ms: Number(duz[i + 1]) });
+        }
+      }
+    } catch (e) {
+      console.error("TAKIP TEST: tum kuyruk okunamadi:", e && e.message ? e.message : e);
+    }
+
     let cikti = "=== TAKIP MESAJI (TEST MODU - HICBIR MESAJ GONDERILMEDI) ===\n";
     cikti += "Kurallar: " + ASAMA1_SAAT + ". saatte hediye metni, " + ASAMA2_SAAT +
       ". saatte indirim sablonu, " + MAX_YAS_SAAT + " saatten eskiye dokunulmaz\n";
-    cikti += "Kuyruktaki aday sayisi: " + adaylar.length + "\n";
+    cikti += "Kuyrukta toplam  : " + tumKuyruk.length + " numara\n";
+    cikti += "Suresi dolan     : " + adaylar.length + " numara (" + ASAMA1_SAAT + " saati gecenler)\n";
 
     const siparisliler = await siparisVerenTelefonlar();
     if (siparisliler === "HATA") {
@@ -485,11 +501,30 @@ async function handleTest(req, res) {
         siparisliler.size + " telefon - bunlara mesaj gitmez\n\n";
     }
 
+    // Henuz suresi dolmamislari da goster - testte en cok ise yarayan kisim bu.
+    const bekleyenler = tumKuyruk
+      .filter(function (k) { return (Date.now() - k.ms) / 3600000 < ASAMA1_SAAT; })
+      .sort(function (a, b) { return b.ms - a.ms; });
+
+    if (bekleyenler.length > 0) {
+      cikti += "SURESI HENUZ DOLMAYANLAR (en yeni ustte, ilk 10):\n";
+      bekleyenler.slice(0, 10).forEach(function (k) {
+        const yas = (Date.now() - k.ms) / 3600000;
+        const kalan = ASAMA1_SAAT - yas;
+        cikti += "  " + k.telefon + " - " + yas.toFixed(1) + " saat once yazdi, " +
+          kalan.toFixed(1) + " saat sonra 1. mesaj gider\n";
+      });
+      cikti += "\n";
+    }
+
     if (adaylar.length === 0) {
-      cikti += "Kuyrukta bekleyen kimse yok.\n\n" +
-        "Bu normal olabilir: kuyruk ancak webhook-process.js'in yeni surumu\n" +
-        "deploy edildikten SONRA yazan musterilerle dolmaya baslar. Kendi\n" +
-        "telefonundan bota bir mesaj at, 3,5 saat sonra burada gorunur.\n";
+      cikti += "Suresi dolan kimse yok, su an gonderilecek mesaj yok.\n\n";
+      if (tumKuyruk.length === 0) {
+        cikti += "Kuyruk tamamen bos. Bu normal olabilir: kuyruk ancak\n" +
+          "webhook-process.js'in yeni surumu deploy edildikten SONRA yazan\n" +
+          "musterilerle dolmaya baslar. Kendi telefonundan bota bir mesaj at,\n" +
+          "bu sayfayi yenileyince numaran yukarida gorunmeli.\n";
+      }
       return res.status(200).send(cikti);
     }
 
