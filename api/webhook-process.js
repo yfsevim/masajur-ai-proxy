@@ -412,6 +412,25 @@ function bilgiTalebiMi(mesaj) {
   return BILGI_TALEBI_KALIPLARI.some(function (k) { return s.includes(k); });
 }
 
+// 2026-10-25: Musteri videoyu GERCEKTEN tekrar istiyor mu?
+// Ayni videonun ikinci kez gitmesine sadece bu durumda izin veriyoruz:
+// video gelmemis, acilmamis ya da musteri acikca "tekrar at" demis.
+const TEKRAR_VIDEO_KALIPLARI = [
+  "video gelmedi", "videoyu alamadim", "videoyu alamadım",
+  "video acilmiyor", "video açılmıyor", "acilmiyor", "açılmıyor",
+  "izleyemedim", "izleyemiyorum", "goremedim", "göremedim",
+  "gorunmuyor", "görünmüyor", "yuklenmiyor", "yüklenmiyor",
+  "tekrar at", "tekrar gonder", "tekrar gönder", "tekrar yollar",
+  "bir daha at", "bir daha gonder", "bir daha gönder",
+  "yeniden at", "yeniden gonder", "yeniden gönder"
+];
+
+function tekrarVideoIstegiMi(mesaj) {
+  const s = String(mesaj || "").toLowerCase();
+  if (!s) return false;
+  return TEKRAR_VIDEO_KALIPLARI.some(function (k) { return s.includes(k); });
+}
+
 // Bu numaraya bu video bu sohbette BASARIYLA gonderildi mi?
 // Not: isaret SADECE basarili gonderimden SONRA birakiliyor. Basarisiz
 // gonderim hicbir seyi kilitlemiyor - eski hata tam buydu.
@@ -819,11 +838,15 @@ module.exports = async (req, res) => {
     }
 
     if (medyaAnahtari && MEDYA[medyaAnahtari]) {
-      // Model kendi karariyla isaret koyduysa kilit dinlemiyoruz: musteri
-      // "video gelmedi", "tekrar atar misin" demis olabilir, o zaman gitmeli.
-      // Sadece BIZIM zorladigimiz gonderim, ayni sohbette tekrar etmesin
-      // diye isarete bakiyor.
-      const atla = medyaZorlandi && (await medyaZatenGittiMi(phone, medyaAnahtari));
+      // 2026-10-25 DUZELTME: kilit artik MODELIN kendi koydugu isaret icin de
+      // gecerli. Eskiden sadece bizim zorladigimiz gonderim kilide bakiyordu;
+      // model "fiyat ne kadar" gibi sonraki mesajlarda da isareti tekrar
+      // koydugu icin ayni 12 MB'lik video ust uste iki kez gidiyordu.
+      // Tek istisna: musteri videoyu GERCEKTEN tekrar istemis olabilir
+      // ("gelmedi", "acilmiyor", "tekrar atar misiniz") - o zaman kilit
+      // dinlenmiyor ve video yeniden gidiyor.
+      const tekrarIstendi = tekrarVideoIstegiMi(message);
+      const atla = !tekrarIstendi && (await medyaZatenGittiMi(phone, medyaAnahtari));
       if (atla) {
         console.log("MEDYA ATLANDI (bu sohbette zaten gonderilmis):", medyaAnahtari);
       } else {
