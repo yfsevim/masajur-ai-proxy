@@ -518,6 +518,79 @@ async function sendMedyaLinki(phone, anahtar) {
   }
 }
 
+// ============================================================
+// TAKIP KUYRUGU (2026-10-25)
+// ------------------------------------------------------------
+// Bilgi alip kaybolan musteriye api/takip.js iki asamali hatirlatma
+// gonderiyor. O dosyanin "kime bakacagini" bilmesi icin her musteri
+// mesajindan sonra telefonu sirali bir kumeye yaziyoruz:
+//   uye  = telefon
+//   skor = mesajin zamani (ms)
+// Ayni telefon tekrar yazarsa zadd skoru GUNCELLER, yeni satir acmaz -
+// yani kumede her zaman "bu kisinin son mesaji ne zamandi" duruyor.
+// takip.js skoru yeterince eski olanlari cekiyor; Redis'te desen taramasi
+// (SCAN) gerekmiyor.
+const TAKIP_KUYRUK = "takip-kuyruk";
+const TAKIP_KAPALI = "takip-kapali:";
+const TAKIP_KAPALI_OMRU = 365 * 24 * 3600;
+
+async function takipKuyrugunaYaz(phone) {
+  try {
+    await redis.zadd(TAKIP_KUYRUK, { score: Date.now(), member: phone });
+  } catch (e) {
+    // Kuyruk yazilamazsa sadece takip mesaji gitmez - musteri cevabini
+    // zaten aldi, akisi bozmuyoruz.
+    console.error("TAKIP KUYRUK YAZILAMADI:", e && e.message ? e.message : e);
+  }
+}
+
+// "Mesaj istemiyorum" - pazarlama sablonundaki vazgecme butonu ya da
+// musterinin kendi yazdigi acik ret. Kalici olarak isaretleniyor.
+const TAKIP_KAPAT_KALIPLARI = [
+  "mesaj istemiyorum", "mesaj atmayın", "mesaj atmayin",
+  "rahatsız etmeyin", "rahatsiz etmeyin",
+  "listeden çıkar", "listeden cikar", "abonelikten çık", "abonelikten cik"
+];
+
+function takipKapatmaIstegiMi(metin) {
+  const s = String(metin || "").toLowerCase();
+  if (!s) return false;
+  return TAKIP_KAPAT_KALIPLARI.some(function (k) { return s.includes(k); });
+}
+
+async function takipKapat(phone) {
+  try {
+    await redis.set(TAKIP_KAPALI + phone, "1", { ex: TAKIP_KAPALI_OMRU });
+    await redis.zrem(TAKIP_KUYRUK, phone);
+  } catch (e) {
+    console.error("TAKIP KAPATILAMADI:", e && e.message ? e.message : e);
+  }
+}
+
+async function duzMetinGonder(phone, metin) {
+  try {
+    await fetchWithTimeout(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "text",
+          text: { body: metin }
+        })
+      },
+      15000
+    );
+  } catch (e) {
+    console.error("DUZ METIN GONDERILEMEDI:", e && e.message ? e.message : e);
+  }
+}
+
 // Mesajda riskli kelime var mi?
 function needsAlert(message) {
   const lower = String(message).toLowerCase();
@@ -537,9 +610,20 @@ module.exports = async (req, res) => {
 
   try {
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
-    const message = value?.messages?.[0]?.text?.body;
-    const phone = value?.messages?.[0]?.from;
-    const messageId = value?.messages?.[0]?.id;
+    const mesajNesnesi = value?.messages?.[0];
+    const phone = mesajNesnesi?.from;
+    const messageId = mesajNesnesi?.id;
+
+    // 2026-10-25: BUTON CEVABI DA OKUNUYOR.
+    // Pazarlama sablonundaki "Mesaj istemiyorum" butonuna basildiginda
+    // Meta bunu text olarak DEGIL, type:"button" olarak gonderiyor.
+    // Eskiden sadece text.body okundugu icin boyle bir cevap sessizce
+    // yok sayilirdi - yani vazgecme butonu hicbir ise yaramazdi.
+    const message =
+      mesajNesnesi?.text?.body ||
+      mesajNesnesi?.button?.text ||
+      mesajNesnesi?.interactive?.button_reply?.title ||
+      "";
 
     console.log("MESAJ:", message);
     console.log("TELEFON:", phone);
@@ -547,6 +631,19 @@ module.exports = async (req, res) => {
     if (!message || !phone) {
       console.log("MESAJ VEYA TELEFON YOK");
       return res.status(200).send("OK");
+    }
+
+    // VAZGECME: once bunu ele al. Claude'a hic gitmesin, kuyruga da
+    // yazilmasin - kisi bir daha takip mesaji almayacak.
+    if (takipKapatmaIstegiMi(message)) {
+      console.log("TAKIP KAPATMA ISTEGI:", phone);
+      await takipKapat(phone);
+      await duzMetinGonder(
+        phone,
+        "Tamamdır, bir daha bu tür mesaj göndermeyeceğiz 🙂 " +
+        "İhtiyacınız olursa buradayız."
+      );
+      return res.status(200).send("OK - takip kapatildi");
     }
 
     // Mukerrer isleme korumasi - ayni mesaj (wamid) daha once islendiyse dur.
@@ -747,6 +844,10 @@ module.exports = async (req, res) => {
     history.push({ role: "user", content: message });
     history.push({ role: "assistant", content: reply });
     await saveHistory(phone, history);
+
+    // Takip kuyruguna yaz: bu kisinin son mesaji SIMDI. Sessizlesirse
+    // api/takip.js 3,5 saat sonra devreye girecek.
+    await takipKuyrugunaYaz(phone);
 
     // Sohbeti Sheets'e kaydet
     // 2026-10-07: wamid artik Sheets'e de gonderiliyor - Apps Script ayni

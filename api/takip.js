@@ -1,0 +1,601 @@
+// api/takip.js
+// BILGI ALIP KAYBOLAN MUSTERIYE TAKIP MESAJI
+//
+// Musteri WhatsApp'a yaziyor (reklamdan, Instagram'dan, siteden), bot
+// cevapliyor, sonra kisi sessizlesiyor. Bu dosya o kisilere iki asamali
+// bir hatirlatma gonderiyor.
+//
+//   1) Son mesajindan 3,5 SAAT sonra -> SERBEST METIN
+//      "479 TL'lik Ari Zehri Kremi hediye" teklifi.
+//      24 saatlik musteri hizmeti penceresi acik oldugu icin sablon
+//      GEREKMIYOR, normal metin gonderebiliyoruz.
+//
+//   2) Hala cevap yoksa 28 SAAT sonra -> META SABLONU (takip_indirim)
+//      "BOYUN kodu ile 500 TL indirim, 48 saat gecerli".
+//      24 saat gectigi icin serbest metin ARTIK GONDERILEMEZ; Meta'nin
+//      onayladigi sablon sart.
+//
+// KUYRUK NASIL DOLUYOR: webhook-process.js her musteri mesajindan sonra
+// telefonu "takip-kuyruk" sirali kumesine (sorted set) yaziyor, skor =
+// mesajin zamani. Ayni telefon tekrar yazarsa skoru guncelleniyor. Burada
+// sadece "skoru yeterince eski" olanlari cekiyoruz - Redis'te desen
+// taramasi (SCAN) yapmaya gerek kalmiyor.
+//
+// KIMLERE GONDERILMIYOR (kullanici karari, 2026-10-25):
+//   - Siparis verenler (hem bottan hem siteden - iki ayri kontrol var)
+//   - Destek konusmalari (kargo/iade/ariza derdi olan, zaten musteri)
+//   - Acikca "ilgilenmiyorum / istemiyorum" diyenler
+//   - "Mesaj istemiyorum" butonuna basanlar (kalici)
+//   - Kendi numaralarimiz
+// NOT: "pahali" diyen BILEREK elenmiyor - indirim teklifinin asil hedefi
+// zaten fiyat itirazi olan musteri.
+//
+// GUVENLIK RAYLARI (sepet-kurtarma.js'teki derslerin aynisi):
+//   - MAX_YAS_SAAT: 72 saatten eski kayitlara dokunulmuyor ve kuyruktan
+//     siliniyor. Ilk deploy'da gecmisteki herkese toplu mesaj gitmesin.
+//   - PARTI_LIMITI: tek calismada en fazla 10 mesaj. Ani mesaj patlamasi
+//     WhatsApp numarasinin kalite puanini dusurur.
+//   - Kisi basina her asamadan SADECE BIR mesaj (Redis bayragi, 30 gun).
+//   - Siparis gecmisi okunamazsa HIC MESAJ GITMEZ (guvenli taraf).
+//
+// TEST MODU: GET ?mod=test&secret=...  -> hicbir mesaj GONDERMEZ, sadece
+// "su an kime ne gonderilecekti" listesini duz metin olarak yazar.
+//
+// GERCEK CALISMA: POST ?secret=...  (QStash Schedule ile 15 dakikada bir)
+
+const { Redis } = require("@upstash/redis");
+const redis = Redis.fromEnv();
+
+const SECRET = "masajur_yakkoholding_2128";
+const API_VERSION = "2026-04";            // diger dosyalarla ayni
+
+// --- Zamanlama (saat) ---
+const ASAMA1_SAAT = 3.5;
+const ASAMA2_SAAT = 28;
+const MAX_YAS_SAAT = 72;
+
+// 24 saatlik serbest metin penceresi. QStash bir sure calismazsa kayitlar
+// birikip 24 saati gecebilir; o durumda 1. mesaji SERBEST METIN olarak
+// gondermeye calismak bosuna hata uretir (Meta reddeder). Pencerenin
+// kenarina gelmis kisiyi atlayip 2. asamada sablonla yakaliyoruz.
+const SERBEST_METIN_SON_SAAT = 23;
+
+// --- Guvenlik sinirlari ---
+const PARTI_LIMITI = 10;
+
+// --- Siparis gecmisi kontrolu ---
+const SIPARIS_GECMISI_GUN = 30;
+const SIPARIS_SAYFA_LIMITI = 8;           // 8 x 250 = 2000 siparis tavan
+
+// --- WhatsApp sablonu (2. asama) ---
+// Meta'da olusturulacak: kategori PAZARLAMA, dil Turkce, PARAMETRESIZ.
+// Parametresiz secildi: musterinin adini cogu zaman bilmiyoruz (sadece
+// siparis akisina giren kisiler ad veriyor), "degerli musterimiz" gibi
+// bir doldurma da samimiyetsiz duruyor.
+const TAKIP2_TEMPLATE = "takip_indirim";
+const TAKIP2_LANG = "tr";
+
+// Kendi numaralarimiz
+const ALERT_NUMBERS = ["905530681619", "905511485344"];
+
+// --- Redis anahtarlari ---
+const KUYRUK = "takip-kuyruk";            // sorted set: uye=telefon, skor=son mesaj ms
+const BAYRAK1 = "takip1:";                // <telefon>
+const BAYRAK2 = "takip2:";                // <telefon>
+const KAPALI = "takip-kapali:";           // <telefon> - "mesaj istemiyorum"
+const SIPARIS_VERDI = "siparis-verdi:";   // <telefon> - chat.js yaziyor
+const MOD_ANAHTARI = "mod:";              // <telefon> - chat.js yaziyor
+const GECMIS = "chat:";                   // <telefon> - webhook-process.js yaziyor
+
+// hediye-sozu: sepet-kurtarma.js ile AYNI anahtar. Siteden siparis
+// gelirse siparis-kayit.js zaten bu bayraga bakip siparisi "hediye-krem"
+// diye etiketliyor; bottan siparis gelirse chat.js ayni bayragi okuyup
+// isletme bildirimine "HEDIYE: Ari Zehri Kremi" notunu dusuyor.
+const HEDIYE_SOZU = "hediye-sozu:";
+const HEDIYE_OMRU = 48 * 3600;
+const BAYRAK_OMRU = 30 * 24 * 3600;       // 30 gun
+const KAPALI_OMRU = 365 * 24 * 3600;      // 1 yil
+
+// Acikca "hayir" diyen musteri. BILEREK DAR tutuldu: "pahali", "dusunurum",
+// "esime soracagim" gibi ifadeler BURADA YOK - onlar hala ikna edilebilir
+// musteriler ve indirim teklifinin asil hedefi onlar.
+const RET_KALIPLARI = [
+  "ilgilenmiyorum", "ilgilenmiyoruz", "istemiyorum", "istemem",
+  "almayacağım", "almayacagim", "almak istemiyorum", "gerek yok",
+  "vazgeçtim", "vazgectim", "iptal edin", "rahatsız etmeyin",
+  "rahatsiz etmeyin", "mesaj atmayın", "mesaj atmayin",
+  "beni aramayın", "beni aramayin", "listeden çıkar", "listeden cikar",
+  "mesaj istemiyorum"
+];
+
+// 1. ASAMA METNI (serbest metin - sablon degil, istedigimiz gibi yazabiliriz)
+const ASAMA1_METIN =
+  "Merhaba 🙂 Masajur hakkında yazmıştınız, aklınızda kalan bir soru varsa " +
+  "buradayım.\n\n" +
+  "Siparişinizi şimdi tamamlarsanız 479 TL değerindeki Arı Zehri Kremi'ni " +
+  "hediye ediyoruz. Visco yastık zaten her siparişte hediye.\n\n" +
+  "Ücretsiz kargo ve kapıda ödeme ile gönderiyoruz. 14 gün iade hakkınız " +
+  "var, memnun kalmazsanız gönül rahatlığıyla iade edebilirsiniz. Cihaz " +
+  "1 yıl garantili.\n\n" +
+  "Dilerseniz ad soyad ve açık adresinizi buraya yazın, siparişinizi ben " +
+  "oluşturayım.";
+
+async function fetchWithTimeout(url, options, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeTelefon(raw) {
+  if (!raw) return "";
+  let d = String(raw).replace(/[^0-9]/g, "");
+  if (!d) return "";
+  if (d.startsWith("0")) d = "90" + d.slice(1);
+  if (!d.startsWith("90")) d = "90" + d;
+  return d;
+}
+
+function telefonCikar(o) {
+  const cust = o.customer || {};
+  const ship = o.shipping_address || {};
+  const bill = o.billing_address || {};
+  return normalizeTelefon(o.phone || ship.phone || bill.phone || cust.phone);
+}
+
+function readWaStatus(waData) {
+  try {
+    if (waData && waData.messages && waData.messages[0] && waData.messages[0].id) {
+      return "Gonderildi OK (" + waData.messages[0].id + ")";
+    }
+    if (waData && waData.error) {
+      const code = waData.error.code != null ? " [" + waData.error.code + "]" : "";
+      return "GITMEDI HATA" + code + ": " + (waData.error.message || "bilinmeyen hata");
+    }
+    return "BELIRSIZ: " + JSON.stringify(waData).slice(0, 150);
+  } catch (e) {
+    return "DURUM OKUNAMADI: " + (e && e.message ? e.message : e);
+  }
+}
+
+// ============================================================
+// SHOPIFY SIPARIS GECMISI
+// ------------------------------------------------------------
+// NOT (bilincli tekrar): asagidaki iki fonksiyonun ayni mantigi
+// sepet-kurtarma.js'te de var. Ortak bir lib/ dosyasina almak dogru
+// olurdu (Yurtici istemcisinde oyle yapildi) ama o is CALISAN
+// sepet-kurtarma.js'i de degistirmeyi gerektiriyor. Yeni sistem
+// oturduktan sonra ikisi birlikte lib/shopify-siparis.js'e tasinmali.
+// ============================================================
+function sonrakiSayfaUrl(linkHeader) {
+  if (!linkHeader) return "";
+  const parcalar = String(linkHeader).split(",");
+  for (const p of parcalar) {
+    if (p.indexOf('rel="next"') !== -1) {
+      const m = p.match(/<([^>]+)>/);
+      if (m) return m[1];
+    }
+  }
+  return "";
+}
+
+// Her istegin basinda null'a cekiliyor - bayat listeyle karar vermeyelim.
+let siparisTelefonCache = null;
+
+async function siparisVerenTelefonlar() {
+  if (siparisTelefonCache) return siparisTelefonCache;
+  try {
+    const kume = new Set();
+    const minDate = new Date(Date.now() - SIPARIS_GECMISI_GUN * 24 * 3600 * 1000).toISOString();
+    let url = `https://${process.env.SHOPIFY_STORE}/admin/api/${API_VERSION}/orders.json` +
+      `?status=any&limit=250&created_at_min=${encodeURIComponent(minDate)}` +
+      `&fields=id,name,phone,customer,shipping_address,billing_address`;
+
+    let sayfa = 0;
+    while (url && sayfa < SIPARIS_SAYFA_LIMITI) {
+      const r = await fetchWithTimeout(url, {
+        headers: {
+          "X-Shopify-Access-Token": process.env.SHOPIFY_TOKEN,
+          "Content-Type": "application/json"
+        }
+      }, 20000);
+      if (!r.ok) {
+        const govde = await r.text().catch(() => "");
+        throw new Error("orders.json HTTP " + r.status + " - " + govde.slice(0, 200));
+      }
+      const data = await r.json().catch(() => ({}));
+      const siparisler = Array.isArray(data.orders) ? data.orders : [];
+      for (const o of siparisler) {
+        const t = telefonCikar(o);
+        if (t) kume.add(t);
+      }
+      url = sonrakiSayfaUrl(r.headers.get("link"));
+      sayfa++;
+    }
+    console.log("TAKIP: son " + SIPARIS_GECMISI_GUN + " gunde siparis veren " +
+      kume.size + " telefon (" + sayfa + " sayfa)");
+    siparisTelefonCache = kume;
+    return kume;
+  } catch (e) {
+    // GUVENLI TARAF: siparis gecmisini okuyamadiysak MESAJ GONDERME.
+    // Zaten almis birine "sana hediye" yazmak, mesajin hic gitmemesinden
+    // cok daha kotu (sepet-kurtarma.js'te yasanmis bir olay).
+    console.error("TAKIP: siparis gecmisi okunamadi (MESAJ GONDERILMIYOR):",
+      e && e.message ? e.message : e);
+    siparisTelefonCache = "HATA";
+    return "HATA";
+  }
+}
+
+// ============================================================
+// Redis yardimcilari
+// ============================================================
+async function bayrakVar(anahtar) {
+  try {
+    const v = await redis.get(anahtar);
+    return !!v;
+  } catch (e) {
+    // Redis okunamiyorsa guvenli taraf: "gonderilmis" say, mesaj gonderme.
+    return true;
+  }
+}
+
+async function bayrakAt(anahtar, omur) {
+  try { await redis.set(anahtar, "1", { ex: omur }); } catch (e) {}
+}
+
+async function kuyruktanSil(telefon) {
+  try { await redis.zrem(KUYRUK, telefon); } catch (e) {}
+}
+
+// Destek modunda mi? chat.js "mod:<telefon>" = "destek:<epoch>" yaziyor.
+async function destekModundaMi(telefon) {
+  try {
+    const v = await redis.get(MOD_ANAHTARI + telefon);
+    return String(v || "").startsWith("destek");
+  } catch (e) {
+    return false;
+  }
+}
+
+// Konusma gecmisinde acik bir ret var mi?
+async function retVarMi(telefon) {
+  try {
+    const h = await redis.get(GECMIS + telefon);
+    if (!Array.isArray(h)) return false;
+    for (const m of h) {
+      if (!m || m.role !== "user") continue;
+      const s = String(m.content || "").toLowerCase();
+      if (RET_KALIPLARI.some(function (k) { return s.includes(k); })) return true;
+    }
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
+// ============================================================
+// WhatsApp gonderimi
+// ============================================================
+async function serbestMetinGonder(telefon, metin) {
+  try {
+    const resp = await fetchWithTimeout(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: telefon,
+          type: "text",
+          text: { body: metin }
+        })
+      },
+      15000
+    );
+    const data = await resp.json().catch(() => ({}));
+    return readWaStatus(data);
+  } catch (e) {
+    return "GITMEDI HATA: " + (e && e.message ? e.message : e);
+  }
+}
+
+async function sablonGonder(telefon) {
+  try {
+    const resp = await fetchWithTimeout(
+      `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: telefon,
+          type: "template",
+          template: {
+            name: TAKIP2_TEMPLATE,
+            language: { code: TAKIP2_LANG }
+            // components YOK: sablon parametresiz.
+          }
+        })
+      },
+      12000
+    );
+    const data = await resp.json().catch(() => ({}));
+    return readWaStatus(data);
+  } catch (e) {
+    return "GITMEDI HATA: " + (e && e.message ? e.message : e);
+  }
+}
+
+// Sheets'e yaz. Apps Script'te "takip_mesaji" dali yoksa kayit
+// "Bilinmeyen Kayitlar" guvenlik agina duser (07.10'da eklenmisti),
+// yani veri kaybolmaz - ama dal eklenirse duzgun sekmeye yazar.
+async function logTakipToSheets(asama, telefon, durum) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    await fetchWithTimeout(process.env.SHEETS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "takip_mesaji",
+        id: "takip-" + asama + "-" + telefon,   // mukerrer korumasi
+        asama: String(asama),
+        phone: String(telefon || ""),
+        status: String(durum || "")
+      })
+    }, 15000);
+  } catch (e) {
+    console.error("TAKIP: Sheets log HATA:", e && e.message ? e.message : e);
+  }
+}
+
+// ============================================================
+// Karar: bu telefona su an hangi asama?
+// Doner: { asama: 0|1|2, sebep: "...", sil: true|false }
+// ============================================================
+async function asamaBelirle(telefon, yasSaat) {
+  if (!telefon) return { asama: 0, sebep: "telefon yok", sil: true };
+  if (ALERT_NUMBERS.includes(telefon)) {
+    return { asama: 0, sebep: "kendi numaramiz", sil: true };
+  }
+  if (yasSaat > MAX_YAS_SAAT) {
+    return { asama: 0, sebep: "cok eski (" + yasSaat.toFixed(1) + " saat)", sil: true };
+  }
+  if (yasSaat < ASAMA1_SAAT) {
+    return { asama: 0, sebep: "henuz erken (" + yasSaat.toFixed(1) + " saat)", sil: false };
+  }
+
+  if (await bayrakVar(KAPALI + telefon)) {
+    return { asama: 0, sebep: "mesaj istemiyor", sil: true };
+  }
+  if (await bayrakVar(BAYRAK2 + telefon)) {
+    return { asama: 0, sebep: "iki mesaj da gonderilmis", sil: true };
+  }
+  if (await destekModundaMi(telefon)) {
+    return { asama: 0, sebep: "destek konusmasi", sil: true };
+  }
+  if (await bayrakVar(SIPARIS_VERDI + telefon)) {
+    return { asama: 0, sebep: "bottan siparis vermis", sil: true };
+  }
+  if (await retVarMi(telefon)) {
+    return { asama: 0, sebep: "acikca ilgilenmedigini soylemis", sil: true };
+  }
+
+  const b1 = await bayrakVar(BAYRAK1 + telefon);
+
+  // Hangi asamaya adayiz?
+  //
+  // SIRA ONEMLI: once 2. asamaya bakiliyor. Ilk yazimda 2. asama "1. mesaj
+  // gitmis olmak" sartina bagliydi; testte su acik cikti: 1. mesaj herhangi
+  // bir sebeple gidemediyse (sistem kapaliydi, o saatte destek modundaydi,
+  // 24 saatlik pencere kapanmisti) kisi 2. mesaji da HIC alamiyor ve 72
+  // saatte sessizce dusuyordu. Artik 28 saati gecen herkes - 1. mesaji alsin
+  // almasin - sablonla yakalaniyor. Eleme kontrolleri (siparis, destek, ret)
+  // bu noktada zaten yeniden calisti.
+  let aday = 0;
+  let sebep = "";
+  if (yasSaat >= ASAMA2_SAAT) {
+    aday = 2;
+    sebep = yasSaat.toFixed(1) + " saat sessiz, indirim kodu" +
+      (b1 ? "" : " (1. mesaj gidememisti)");
+  } else if (!b1) {
+    if (yasSaat > SERBEST_METIN_SON_SAAT) {
+      // 24 saatlik serbest metin penceresi kapanmak uzere: su an metin
+      // gondermek bosuna hata uretir. 28. saatte sablonla yakalayacagiz.
+      return {
+        asama: 0,
+        sebep: "pencere kapanmis (" + yasSaat.toFixed(1) + " saat), 2. asama bekleniyor",
+        sil: false
+      };
+    }
+    aday = 1;
+    sebep = yasSaat.toFixed(1) + " saat sessiz, hediye teklifi";
+  } else {
+    return {
+      asama: 0,
+      sebep: "1. mesaj gitti, " + yasSaat.toFixed(1) + " saat (" + ASAMA2_SAAT + " bekleniyor)",
+      sil: false
+    };
+  }
+
+  // SON KONTROL (en pahalisi, bilerek en sonda): siteden siparis vermis mi?
+  const siparisliler = await siparisVerenTelefonlar();
+  if (siparisliler === "HATA") {
+    return { asama: 0, sebep: "siparis gecmisi okunamadi, guvenli taraf", sil: false };
+  }
+  if (siparisliler.has(telefon)) {
+    return { asama: 0, sebep: "son " + SIPARIS_GECMISI_GUN + " gunde siparisi var", sil: true };
+  }
+
+  return { asama: aday, sebep: sebep, sil: false };
+}
+
+// Kuyruktan islenecek adaylari cek: skoru (son mesaj zamani) ASAMA1_SAAT'ten
+// eski olan herkes. En eskiden baslayarak.
+async function adaylariGetir() {
+  const tavan = Date.now() - ASAMA1_SAAT * 3600 * 1000;
+  try {
+    // Upstash: zrange(key, min, max, { byScore: true })
+    const uyeler = await redis.zrange(KUYRUK, 0, tavan, { byScore: true });
+    return Array.isArray(uyeler) ? uyeler : [];
+  } catch (e) {
+    console.error("TAKIP: kuyruk okunamadi:", e && e.message ? e.message : e);
+    return [];
+  }
+}
+
+async function sonMesajZamani(telefon) {
+  try {
+    const skor = await redis.zscore(KUYRUK, telefon);
+    return skor == null ? 0 : Number(skor);
+  } catch (e) {
+    return 0;
+  }
+}
+
+// ============ TEST MODU (hicbir mesaj gondermez) ============
+async function handleTest(req, res) {
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) return res.status(401).send("Unauthorized");
+
+  siparisTelefonCache = null;
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+
+  try {
+    const adaylar = await adaylariGetir();
+    let cikti = "=== TAKIP MESAJI (TEST MODU - HICBIR MESAJ GONDERILMEDI) ===\n";
+    cikti += "Kurallar: " + ASAMA1_SAAT + ". saatte hediye metni, " + ASAMA2_SAAT +
+      ". saatte indirim sablonu, " + MAX_YAS_SAAT + " saatten eskiye dokunulmaz\n";
+    cikti += "Kuyruktaki aday sayisi: " + adaylar.length + "\n";
+
+    const siparisliler = await siparisVerenTelefonlar();
+    if (siparisliler === "HATA") {
+      cikti += "SIPARIS GECMISI : >>> OKUNAMADI <<< - bu haldeyken HICBIR MESAJ GITMEZ.\n\n";
+    } else {
+      cikti += "Siparis gecmisi : son " + SIPARIS_GECMISI_GUN + " gunde " +
+        siparisliler.size + " telefon - bunlara mesaj gitmez\n\n";
+    }
+
+    if (adaylar.length === 0) {
+      cikti += "Kuyrukta bekleyen kimse yok.\n\n" +
+        "Bu normal olabilir: kuyruk ancak webhook-process.js'in yeni surumu\n" +
+        "deploy edildikten SONRA yazan musterilerle dolmaya baslar. Kendi\n" +
+        "telefonundan bota bir mesaj at, 3,5 saat sonra burada gorunur.\n";
+      return res.status(200).send(cikti);
+    }
+
+    let sayac1 = 0, sayac2 = 0;
+    for (const telefon of adaylar) {
+      const ms = await sonMesajZamani(telefon);
+      const yas = ms ? (Date.now() - ms) / 3600000 : 999;
+      const { asama, sebep } = await asamaBelirle(telefon, yas);
+      if (asama === 1) sayac1++;
+      if (asama === 2) sayac2++;
+
+      cikti += "-----------------------------------------\n";
+      cikti += "Telefon   : " + telefon + "\n";
+      cikti += "Son mesaj : " + yas.toFixed(1) + " saat once\n";
+      cikti += "KARAR     : " + (asama === 0 ? "MESAJ YOK" : asama + ". ASAMA GIDERDI") +
+        " - " + sebep + "\n";
+    }
+
+    cikti += "-----------------------------------------\n\n";
+    cikti += "OZET: " + sayac1 + " hediye metni, " + sayac2 + " indirim sablonu gidecekti.\n\n";
+    cikti += "KONTROL LISTESI:\n";
+    cikti += "  1) 'Siparis gecmisi' satirinda makul bir sayi var mi?\n";
+    cikti += "  2) Siparis vermis bir numara listede 'siparisi var' diye eleniyor mu?\n";
+    cikti += "  3) Kargo/iade soran biri 'destek konusmasi' diye eleniyor mu?\n";
+    cikti += "  4) 2. asama icin Meta'da '" + TAKIP2_TEMPLATE + "' sablonu ONAYLANDI mi?\n";
+    cikti += "     Onaylanmadan 2. mesaj GITMEZ (hata doner, bayrak yine de atilir).\n";
+    return res.status(200).send(cikti);
+  } catch (error) {
+    return res.status(200).send("HATA: " + (error && error.message ? error.message : error));
+  }
+}
+
+// ============ GERCEK CALISMA ============
+module.exports = async (req, res) => {
+  if (req.method === "GET" && req.query && req.query.mod === "test") {
+    return handleTest(req, res);
+  }
+
+  if (req.method !== "POST") return res.status(200).send("OK");
+
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) {
+    console.error("TAKIP: gecersiz secret");
+    return res.status(401).send("Unauthorized");
+  }
+
+  siparisTelefonCache = null;
+
+  try {
+    const adaylar = await adaylariGetir();
+    console.log("TAKIP: kuyruktaki aday sayisi:", adaylar.length);
+
+    let gonderilen1 = 0, gonderilen2 = 0;
+    const detaylar = [];
+
+    for (const telefon of adaylar) {
+      if (gonderilen1 + gonderilen2 >= PARTI_LIMITI) {
+        console.log("TAKIP: parti limiti doldu, kalanlar sonraki calismada");
+        break;
+      }
+
+      const ms = await sonMesajZamani(telefon);
+      const yas = ms ? (Date.now() - ms) / 3600000 : 999;
+      const { asama, sebep, sil } = await asamaBelirle(telefon, yas);
+
+      if (asama === 0) {
+        if (sil) {
+          await kuyruktanSil(telefon);
+          console.log("TAKIP ELENDI (" + telefon + "):", sebep);
+        }
+        continue;
+      }
+
+      if (asama === 1) {
+        const durum = await serbestMetinGonder(telefon, ASAMA1_METIN);
+        // Bayrak gonderim basarisiz olsa da atiliyor: mukerrer pazarlama
+        // mesaji riskini tekrar deneme kazancina tercih etmiyoruz.
+        await bayrakAt(BAYRAK1 + telefon, BAYRAK_OMRU);
+        // Hediye sozu verildi: 48 saat icinde siparis gelirse hem siteden
+        // (siparis-kayit.js etiketler) hem bottan (chat.js bildirime not
+        // duser) kremin eklenecegi biliniyor.
+        await bayrakAt(HEDIYE_SOZU + telefon, HEDIYE_OMRU);
+        console.log("TAKIP ASAMA-1 (" + telefon + "):", durum, "|", sebep);
+        await logTakipToSheets(1, telefon, durum);
+        gonderilen1++;
+        detaylar.push(telefon + ":ASAMA1");
+      } else {
+        const durum = await sablonGonder(telefon);
+        await bayrakAt(BAYRAK2 + telefon, BAYRAK_OMRU);
+        await kuyruktanSil(telefon);   // bu kisiyle isimiz bitti
+        console.log("TAKIP ASAMA-2 INDIRIM (" + telefon + "):", durum, "|", sebep);
+        await logTakipToSheets(2, telefon, durum);
+        gonderilen2++;
+        detaylar.push(telefon + ":ASAMA2-INDIRIM");
+      }
+
+      await new Promise(r => setTimeout(r, 300)); // WhatsApp'i yormayalim
+    }
+
+    const ozet = adaylar.length + " aday bakildi, " + gonderilen1 + " hediye metni, " +
+      gonderilen2 + " indirim sablonu gonderildi" +
+      (detaylar.length ? " - " + detaylar.join(", ") : "");
+    console.log("TAKIP OZET:", ozet);
+    return res.status(200).send("OK - " + ozet);
+  } catch (error) {
+    console.error("TAKIP HATA:", error && error.message ? error.message : error);
+    return res.status(200).send("OK - hata: " + (error && error.message ? error.message : error));
+  }
+};

@@ -319,6 +319,46 @@ function siparisParmakIzi(s) {
   return String(h);
 }
 
+// ============================================================
+// TAKIP SISTEMI KANCALARI (2026-10-25)
+// ------------------------------------------------------------
+// api/takip.js, bilgi alip kaybolan musteriye iki asamali hatirlatma
+// gonderiyor. Burada iki kucuk is yapiyoruz:
+//
+//   1) Siparis veren telefonu KALICI olarak isaretle. Yukaridaki
+//      "siparis-bildirildi:" kilidi 24 saatlik ve parmak izi iceriyor,
+//      yani "bu numara siparis verdi mi" sorusuna cevap vermiyor.
+//      takip.js'in buna ihtiyaci var - almis adama "sana hediye"
+//      yazmayalim.
+//
+//   2) Takip mesaji "Ari Zehri Kremi hediye" sozu verdiyse, siparis
+//      bildirimine bu notu dus. Bayragi takip.js (ve ayni anahtarla
+//      sepet-kurtarma.js) birakiyor.
+// ============================================================
+const SIPARIS_VERDI_ANAHTARI = "siparis-verdi:";
+const SIPARIS_VERDI_OMRU = 60 * 24 * 3600;   // 60 gun
+const HEDIYE_SOZU_ANAHTARI = "hediye-sozu:";
+
+async function siparisVerdiIsaretle(telefon) {
+  const t = tekSatir(telefon).replace(/[^0-9]/g, "");
+  if (!t) return;
+  try {
+    await redis.set(SIPARIS_VERDI_ANAHTARI + t, "1", { ex: SIPARIS_VERDI_OMRU });
+  } catch (e) {
+    console.error("CHAT: siparis-verdi isareti yazilamadi:", e && e.message ? e.message : e);
+  }
+}
+
+async function hediyeSozuVarMi(telefon) {
+  const t = tekSatir(telefon).replace(/[^0-9]/g, "");
+  if (!t) return false;
+  try {
+    return !!(await redis.get(HEDIYE_SOZU_ANAHTARI + t));
+  } catch (e) {
+    return false;
+  }
+}
+
 // true = bu siparis ILK KEZ geliyor, bildirim gonderilebilir
 async function siparisKilidiAl(s) {
   try {
@@ -1259,6 +1299,25 @@ module.exports = async (req, res) => {
         tekSatir(ayirma.siparis.ad), "|",
         tekSatir(ayirma.siparis.telefon), "|",
         tekSatir(ayirma.siparis.kanal));
+      // Takip mesajiyla krem sozu verilmis mi? Verildiyse isletme
+      // bildirimine ve Sheets satirina "not:" alanindan dusuyor -
+      // siparisBildir/Sheets tarafinda hicbir sey degistirmek gerekmiyor.
+      try {
+        if (await hediyeSozuVarMi(ayirma.siparis.telefon)) {
+          const eskiNot = tekSatir(ayirma.siparis.not);
+          ayirma.siparis.not =
+            (eskiNot ? eskiNot + " | " : "") + "HEDIYE: Ari Zehri Kremi";
+          console.log("CHAT SIPARIS: hediye krem sozu var, nota eklendi");
+        }
+      } catch (e) {
+        console.error("CHAT SIPARIS: hediye notu eklenemedi:", e && e.message ? e.message : e);
+      }
+
+      // Bu numara artik musteri: takip.js bir daha pazarlama mesaji
+      // gondermesin. Bildirim gitse de gitmese de isaretliyoruz -
+      // siparis alindi, onemli olan bu.
+      await siparisVerdiIsaretle(ayirma.siparis.telefon);
+
       let bildirimGitti = false;
       try {
         // Sigorta: ayni siparis (ayni telefon + ad + adres) 24 saat icinde
