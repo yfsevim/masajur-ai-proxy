@@ -362,15 +362,18 @@ async function logTakipToSheets(asama, telefon, durum) {
 // Karar: bu telefona su an hangi asama?
 // Doner: { asama: 0|1|2, sebep: "...", sil: true|false }
 // ============================================================
-async function asamaBelirle(telefon, yasSaat) {
+// zorla=true SADECE elle test tetiklemesinde (mod=simdi-gonder) geliyor.
+// Yalnizca ZAMAN kontrollerini ve kendi numara elemesini atlatir; opt-out,
+// siparis, destek, ret gibi GERCEK guvenlik elemeleri aynen calisir.
+async function asamaBelirle(telefon, yasSaat, zorla) {
   if (!telefon) return { asama: 0, sebep: "telefon yok", sil: true };
-  if (ALERT_NUMBERS.includes(telefon)) {
+  if (!zorla && ALERT_NUMBERS.includes(telefon)) {
     return { asama: 0, sebep: "kendi numaramiz", sil: true };
   }
-  if (yasSaat > MAX_YAS_SAAT) {
+  if (!zorla && yasSaat > MAX_YAS_SAAT) {
     return { asama: 0, sebep: "cok eski (" + yasSaat.toFixed(1) + " saat)", sil: true };
   }
-  if (yasSaat < ASAMA1_SAAT) {
+  if (!zorla && yasSaat < ASAMA1_SAAT) {
     return { asama: 0, sebep: "henuz erken (" + yasSaat.toFixed(1) + " saat)", sil: false };
   }
 
@@ -590,10 +593,68 @@ async function handleVideoSifirla(req, res) {
   }
 }
 
+// ============ TEST YARDIMCISI: SIMDI GONDER ============
+// GET ?mod=simdi-gonder&telefon=905...&asama=1&secret=...
+// Tek bir numaraya takip mesajini 3,5 saat beklemeden HEMEN gonderir.
+// Sadece ZAMAN kosulunu ve kendi-numara elemesini atlar; opt-out, siparis,
+// destek konusmasi ve ret elemeleri aynen calisir. Gercek gonderimle ayni
+// bayraklari atar, ayni Sheets kaydini yazar - yani gercek akisin aynisi.
+async function handleSimdiGonder(req, res) {
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) return res.status(401).send("Unauthorized");
+
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  siparisTelefonCache = null;
+
+  const telefon = normalizeTelefon((req.query && req.query.telefon) || "");
+  if (!telefon) {
+    return res.status(200).send("telefon parametresi gerekli.\nOrnek: ?mod=simdi-gonder&telefon=905551112233&asama=1&secret=...");
+  }
+
+  const istenenAsama = String((req.query && req.query.asama) || "1") === "2" ? 2 : 1;
+  const sahteYas = istenenAsama === 2 ? ASAMA2_SAAT : ASAMA1_SAAT;
+
+  try {
+    const { asama, sebep } = await asamaBelirle(telefon, sahteYas, true);
+    if (asama === 0) {
+      return res.status(200).send(
+        "GONDERILMEDI: " + telefon + "\nSebep: " + sebep + "\n\n" +
+        "Bu bir eleme. Gercek akista da bu kisiye mesaj gitmezdi.\n"
+      );
+    }
+
+    let durum;
+    if (asama === 1) {
+      durum = await serbestMetinGonder(telefon, ASAMA1_METIN);
+      await bayrakAt(BAYRAK1 + telefon, BAYRAK_OMRU);
+      await bayrakAt(HEDIYE_SOZU + telefon, HEDIYE_OMRU);
+    } else {
+      durum = await sablonGonder(telefon);
+      await bayrakAt(BAYRAK2 + telefon, BAYRAK_OMRU);
+      await kuyruktanSil(telefon);
+    }
+    await logTakipToSheets(asama, telefon, durum);
+
+    return res.status(200).send(
+      "GONDERILDI: " + telefon + "\n" +
+      "  asama  : " + asama + (asama === 1 ? " (hediye metni)" : " (indirim sablonu)") + "\n" +
+      "  durum  : " + durum + "\n" +
+      "  karar  : " + sebep + "\n\n" +
+      "WhatsApp'ini kontrol et. 'durum' OK degilse mesaj gitmemistir.\n"
+    );
+  } catch (e) {
+    return res.status(200).send("HATA: " + (e && e.message ? e.message : e));
+  }
+}
+
 // ============ GERCEK CALISMA ============
 module.exports = async (req, res) => {
   if (req.method === "GET" && req.query && req.query.mod === "test") {
     return handleTest(req, res);
+  }
+
+  if (req.method === "GET" && req.query && req.query.mod === "simdi-gonder") {
+    return handleSimdiGonder(req, res);
   }
 
   if (req.method === "GET" && req.query && req.query.mod === "video-sifirla") {
