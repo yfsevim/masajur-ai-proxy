@@ -32,6 +32,69 @@ const TEMPLATE_LANG = "tr";
 // olusturuluyor. Bilincli olarak SIPARIS bazinda (fulfillment olayi bazinda
 // degil) tek seferlik - bu magazada siparis basina tek kargo/tek fulfillment
 // olmasi bekleniyor, kismi/coklu fulfillment senaryosu yok.
+// --- SESSIZ SAAT (2026-10-26) ---
+// 22:00 - 09:00 arasi musteriye mesaj gonderilmiyor.
+// BU DOSYA FARKLI: Shopify'in fulfillment webhook'u tek seferlik tetikliyor;
+// sadece cikarsak kargo bildirimi TAMAMEN KAYBOLUR (ustelik asagidaki
+// mukerrer kilidi de alinmis olurdu, bir daha hic gonderilmezdi). Bu yuzden
+// cikmiyoruz: ayni istegi sabah 09:00'a ERTELEYIP QStash'e koyuyoruz.
+// ERTELEME KILITTEN ONCE yapiliyor - sonra yapilsaydi sabah gelen istek
+// "zaten bildirildi" diye elenirdi.
+const SESSIZ_BASLANGIC = 22;
+const SESSIZ_BITIS = 9;
+
+function turkiyeSaati() {
+  return (new Date().getUTCHours() + 3) % 24;
+}
+
+function sessizSaatteMiyiz() {
+  const s = turkiyeSaati();
+  return s >= SESSIZ_BASLANGIC || s < SESSIZ_BITIS;
+}
+
+function sabahaKalanSn() {
+  const simdi = new Date();
+  const saat = (simdi.getUTCHours() + 3) % 24;
+  const dakika = simdi.getUTCMinutes();
+  const kalanDakika = saat >= SESSIZ_BASLANGIC
+    ? (24 - saat + SESSIZ_BITIS) * 60 - dakika
+    : (SESSIZ_BITIS - saat) * 60 - dakika;
+  return Math.max(60, kalanDakika * 60);
+}
+
+// Siparisin tamamini sabaha ertele. Donen: true = ertelendi.
+// false donerse cagiran taraf normal akisa devam etmeli - erteleyemedik
+// diye kargo bildirimini tamamen kaybetmek cok daha kotu.
+async function sabahaErtele(govde) {
+  try {
+    if (!process.env.QSTASH_TOKEN) {
+      console.log("FULFILLMENT: QSTASH_TOKEN yok, ertelenemedi - normal gonderime devam");
+      return false;
+    }
+    const sn = sabahaKalanSn();
+    const hedef = "https://masajur-ai-proxy.vercel.app/api/fulfillment?secret=" + SECRET;
+    const resp = await fetch("https://qstash.upstash.io/v2/publish/" + hedef, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + process.env.QSTASH_TOKEN,
+        "Content-Type": "application/json",
+        "Upstash-Delay": sn + "s"
+      },
+      body: JSON.stringify(Object.assign({}, govde, { _ertelendi: true }))
+    });
+    const data = await resp.json().catch(function () { return {}; });
+    if (data && data.messageId) {
+      console.log("FULFILLMENT: sessiz saat, " + Math.round(sn / 60) + " dk sonraya ertelendi:", data.messageId);
+      return true;
+    }
+    console.error("FULFILLMENT: erteleme basarisiz, normal gonderime devam:", JSON.stringify(data).slice(0, 200));
+    return false;
+  } catch (e) {
+    console.error("FULFILLMENT: erteleme HATA, normal gonderime devam:", e && e.message ? e.message : e);
+    return false;
+  }
+}
+
 async function kargoBildirimKilidiAl(orderNumber) {
   try {
     const result = await redis.set("kargo-bildirimi-yapildi:" + orderNumber, "1", { nx: true, ex: 90 * 24 * 3600 });
@@ -181,6 +244,18 @@ module.exports = async (req, res) => {
   }
   try {
     const order = req.body || {};
+
+    // Sessiz saat: siparisin TAMAMINI sabaha ertele. Mukerrer kilidinden
+    // ONCE yapiliyor, yoksa sabah gelen istek "zaten bildirildi" diye elenir.
+    if (sessizSaatteMiyiz() && !order._ertelendi) {
+      const ertelendi = await sabahaErtele(order);
+      if (ertelendi) {
+        return res.status(200).send("OK - sessiz saat, sabaha ertelendi");
+      }
+      // Ertelenemediyse normal akisa devam: kargo bildirimini tamamen
+      // kaybetmektense gec saatte gondermeyi tercih ediyoruz.
+    }
+
     const firstName =
       (order.destination && order.destination.first_name) ||
       (order.customer && order.customer.first_name) ||

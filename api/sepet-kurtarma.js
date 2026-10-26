@@ -53,6 +53,26 @@ const MIN_MESAJ_ARALIGI_SAAT = 2;
 // --- Guvenlik sinirlari ---
 const PARTI_LIMITI = 10;                 // tek calismada en fazla kac mesaj
 
+// --- SESSIZ SAAT (2026-10-26) ---
+// takip.js ile AYNI kural. Gece yarisindan sonra satis mesaji gonderiyorduk;
+// uyuyan insani rahatsiz ediyor, engellenme/sikayet WhatsApp kalite puanini
+// dusuruyor ve gece okunan mesaj zaten donusmuyor.
+// Bu dosya QStash ile 15 dakikada bir calistigi icin cikmak YETERLI: sepet
+// Shopify'in listesinde duruyor, bayrak atilmiyor, sabah 09:00'daki ilk
+// calismada normal sirasiyla yakalaniyor.
+const SESSIZ_BASLANGIC = 22;   // 22:00'den itibaren gonderim yok
+const SESSIZ_BITIS = 9;        // 09:00'da tekrar basliyor
+
+// Vercel UTC calisiyor, Turkiye UTC+3 (yaz saati uygulamasi yok).
+function turkiyeSaati() {
+  return (new Date().getUTCHours() + 3) % 24;
+}
+
+function sessizSaatteMiyiz() {
+  const s = turkiyeSaati();
+  return s >= SESSIZ_BASLANGIC || s < SESSIZ_BITIS;
+}
+
 // --- SIPARIS VERMIS MUSTERI KONTROLU ---
 // 2026-09-18, GERCEK OLAY: Ibrahim O. bir gun once siparisini vermisti. Ertesi
 // gun siteye tekrar girdi ve yeni bir sepet birakti. O YENI sepetin
@@ -439,6 +459,9 @@ async function handleTest(req, res) {
     cikti += "Shopify'dan donen kayit sayisi: " + sepetler.length + "\n";
     cikti += "Kurallar: " + ASAMA1_SAAT + ". saatte hatirlatma, " + ASAMA2_SAAT +
       ". saatte hediye, " + MAX_YAS_SAAT + " saatten eskiye dokunulmaz\n";
+    cikti += "Sessiz saat: " + SESSIZ_BASLANGIC + ":00 - " + SESSIZ_BITIS +
+      ":00 arasi gonderim YOK. Su an Turkiye saati " + turkiyeSaati() + ":00" +
+      (sessizSaatteMiyiz() ? "  >>> SESSIZ SAATTEYIZ, su an mesaj gitmez <<<" : "") + "\n";
 
     // Siparis gecmisi sorgusunu test modunda HER ZAMAN calistir. Gercek
     // calismada bu sorgu sadece mesaj adayi varsa yapiliyor; ama burada
@@ -511,6 +534,17 @@ module.exports = async (req, res) => {
   if (secret !== SECRET) {
     console.error("SEPET-KURTARMA: gecersiz secret");
     return res.status(401).send("Unauthorized");
+  }
+
+  // Sessiz saat: hicbir sey gondermeden cik. Sepetler oldugu gibi kaliyor,
+  // bayrak atilmiyor - sabah ilk calismada yakalaniyorlar.
+  if (sessizSaatteMiyiz()) {
+    const s = turkiyeSaati();
+    console.log("SEPET-KURTARMA: sessiz saat (" + s + ":00), gonderim yok");
+    return res.status(200).send(
+      "OK - sessiz saat (" + s + ":00). Gonderim " + SESSIZ_BITIS +
+      ":00 - " + SESSIZ_BASLANGIC + ":00 arasinda yapiliyor."
+    );
   }
 
   if (!process.env.SHOPIFY_STORE || !process.env.SHOPIFY_TOKEN) {

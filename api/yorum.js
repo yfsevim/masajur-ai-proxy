@@ -20,6 +20,69 @@ const TEMPLATE_LANG = "tr";
 // kesici anahtarini kullanir.
 const cb = yurtici.createCircuitBreaker("yurtici-cb");
 
+// --- SESSIZ SAAT (2026-10-26) ---
+// 22:00 - 09:00 arasi musteriye mesaj gonderilmiyor.
+// BU DOSYA FARKLI: takip.js ve sepet-kurtarma.js 15 dakikada bir calisan
+// taramalar, orada "cikip gitmek" yeterli - is sabah tekrar denenir.
+// Burada ise QStash TEK SEFERLIK bir gorev tetikliyor; sadece cikarsak
+// yorum istegi TAMAMEN KAYBOLUR. Bu yuzden cikmiyoruz: ayni gorevi sabah
+// 09:00'a ERTELEYIP yeniden kuyruga koyuyoruz.
+const SESSIZ_BASLANGIC = 22;
+const SESSIZ_BITIS = 9;
+
+function turkiyeSaati() {
+  return (new Date().getUTCHours() + 3) % 24;
+}
+
+function sessizSaatteMiyiz() {
+  const s = turkiyeSaati();
+  return s >= SESSIZ_BASLANGIC || s < SESSIZ_BITIS;
+}
+
+// Su andan sabah SESSIZ_BITIS:00'a kac saniye var
+function sabahaKalanSn() {
+  const simdi = new Date();
+  const saat = (simdi.getUTCHours() + 3) % 24;
+  const dakika = simdi.getUTCMinutes();
+  const kalanDakika = saat >= SESSIZ_BASLANGIC
+    ? (24 - saat + SESSIZ_BITIS) * 60 - dakika
+    : (SESSIZ_BITIS - saat) * 60 - dakika;
+  return Math.max(60, kalanDakika * 60);
+}
+
+// Gorevi sabaha ertele. Donen: true = ertelendi, false = ertelenemedi
+// (o durumda cagiran taraf mesaji normal sekilde gondermeli - erteleyemedik
+// diye yorum istegini tamamen kaybetmek daha kotu).
+async function sabahaErtele(govde) {
+  try {
+    if (!process.env.QSTASH_TOKEN) {
+      console.log("YORUM: QSTASH_TOKEN yok, ertelenemedi - normal gonderime devam");
+      return false;
+    }
+    const sn = sabahaKalanSn();
+    const hedef = "https://masajur-ai-proxy.vercel.app/api/yorum?secret=" + SECRET;
+    const resp = await fetch("https://qstash.upstash.io/v2/publish/" + hedef, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + process.env.QSTASH_TOKEN,
+        "Content-Type": "application/json",
+        "Upstash-Delay": sn + "s"
+      },
+      body: JSON.stringify(Object.assign({}, govde, { _ertelendi: true }))
+    });
+    const data = await resp.json().catch(function () { return {}; });
+    if (data && data.messageId) {
+      console.log("YORUM: sessiz saat, " + Math.round(sn / 60) + " dk sonraya ertelendi:", data.messageId);
+      return true;
+    }
+    console.error("YORUM: erteleme basarisiz, normal gonderime devam:", JSON.stringify(data).slice(0, 200));
+    return false;
+  } catch (e) {
+    console.error("YORUM: erteleme HATA, normal gonderime devam:", e && e.message ? e.message : e);
+    return false;
+  }
+}
+
 // Siparisin gercek teslim durumunu getirir. null donerse (devre kesici acik
 // veya sorgu basarisiz) durum BILINMIYOR demektir - cagiran taraf bu durumda
 // eski davranisa (yorum gonder) donmeli.
@@ -111,6 +174,18 @@ module.exports = async (req, res) => {
       console.error("YORUM: phone yok, mesaj gonderilemedi");
       await logYorumToSheets("", name, orderNumber, "GITMEDI: telefon yok");
       return res.status(200).send("OK");
+    }
+
+    // Sessiz saat: gorevi sabaha ertele. _ertelendi bayragi ikinci kez
+    // ertelemeyi onluyor (sabah 09:00'da geldiginde zaten sessiz saat degil,
+    // ama saat kaymasina karsi guvence).
+    if (sessizSaatteMiyiz() && !body._ertelendi) {
+      const ertelendi = await sabahaErtele({ orderNumber: orderNumber, phone: phone, name: name });
+      if (ertelendi) {
+        return res.status(200).send("OK - sessiz saat, sabaha ertelendi");
+      }
+      // Ertelenemediyse asagidan normal akisa devam: yorum istegini
+      // tamamen kaybetmektense gec saatte gondermeyi tercih ediyoruz.
     }
 
     // Once gercekten teslim edilmis mi kontrol et. Durum bilinmiyorsa
