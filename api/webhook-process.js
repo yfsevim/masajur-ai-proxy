@@ -249,15 +249,40 @@ const SHEETS_LOG_DENEME_SAYISI = 2;
 const SHEETS_LOG_ZAMAN_ASIMI_MS = 12000;
 const SHEETS_LOG_DENEME_ARASI_MS = 500;
 
+// 2026-10-26: BIZ musteriye "satin al" diye yazdiysak (takip 1 veya 2),
+// o konusma genel sohbet kaydina karismasin - ayri sekmeye dussun.
+// takip.js mesaji gonderirken TAKIP_SOHBET bayragini 48 saatligine
+// atiyor; burada sadece okuyoruz.
+const TAKIP_SOHBET = "takip-sohbet:";
+
+async function takipSohbetiMi(phone) {
+  try {
+    const v = await redis.get(TAKIP_SOHBET + phone);
+    return !!v;
+  } catch (e) {
+    // Redis okunamiyorsa normal sohbet kabul et: kayit yine tutulur,
+    // sadece yanlis sekmeye duser. Kayit kaybetmekten iyidir.
+    console.error("TAKIP SOHBET BAYRAGI OKUNAMADI:", e && e.message ? e.message : e);
+    return false;
+  }
+}
+
 async function logToSheets(phone, message, reply, kayitId) {
   if (!process.env.SHEETS_URL) return;
 
+  const takipli = await takipSohbetiMi(phone);
+
   const govde = JSON.stringify({
+    // type YOKSA Apps Script varsayilan dala, yani "Musteri Konusmalari"
+    // sekmesine yaziyor. Takipli konusmada type gonderiyoruz.
+    type: takipli ? "takip_sohbet" : undefined,
     id: kayitId || "",     // Apps Script bununla mukerreri eliyor
     phone: phone,
     message: message,
     reply: reply
   });
+
+  if (takipli) console.log("SHEETS LOG: takip sohbeti olarak yazilacak");
 
   for (let deneme = 1; deneme <= SHEETS_LOG_DENEME_SAYISI; deneme++) {
     const basladi = Date.now();

@@ -93,6 +93,14 @@ const GECMIS = "chat:";                   // <telefon> - webhook-process.js yazi
 // isletme bildirimine "HEDIYE: Ari Zehri Kremi" notunu dusuyor.
 const HEDIYE_SOZU = "hediye-sozu:";
 const HEDIYE_OMRU = 48 * 3600;
+
+// 2026-10-26: BIZ musteriye "satin al" diye yazdik. Bundan sonraki 48
+// saatlik yazisma genel sohbet kaydina karismasin diye isaretleniyor;
+// webhook-process.js bu bayragi okuyup Sheets'e "takip_sohbet" tipiyle
+// yaziyor. 48 saat sonra kendiliginden normale donuyor - musteri bir ay
+// sonra kargo sorarsa o normal sohbete dusuyor.
+const TAKIP_SOHBET = "takip-sohbet:";
+const TAKIP_SOHBET_OMRU = 48 * 3600;
 const BAYRAK_OMRU = 30 * 24 * 3600;       // 30 gun
 const KAPALI_OMRU = 365 * 24 * 3600;      // 1 yil
 
@@ -633,6 +641,7 @@ async function handleSimdiGonder(req, res) {
       await bayrakAt(BAYRAK2 + telefon, BAYRAK_OMRU);
       await kuyruktanSil(telefon);
     }
+    await bayrakAt(TAKIP_SOHBET + telefon, TAKIP_SOHBET_OMRU);
     await logTakipToSheets(asama, telefon, durum);
 
     return res.status(200).send(
@@ -705,6 +714,7 @@ module.exports = async (req, res) => {
         // (siparis-kayit.js etiketler) hem bottan (chat.js bildirime not
         // duser) kremin eklenecegi biliniyor.
         await bayrakAt(HEDIYE_SOZU + telefon, HEDIYE_OMRU);
+        await bayrakAt(TAKIP_SOHBET + telefon, TAKIP_SOHBET_OMRU);
         console.log("TAKIP ASAMA-1 (" + telefon + "):", durum, "|", sebep);
         await logTakipToSheets(1, telefon, durum);
         gonderilen1++;
@@ -712,6 +722,7 @@ module.exports = async (req, res) => {
       } else {
         const durum = await sablonGonder(telefon);
         await bayrakAt(BAYRAK2 + telefon, BAYRAK_OMRU);
+        await bayrakAt(TAKIP_SOHBET + telefon, TAKIP_SOHBET_OMRU);
         await kuyruktanSil(telefon);   // bu kisiyle isimiz bitti
         console.log("TAKIP ASAMA-2 INDIRIM (" + telefon + "):", durum, "|", sebep);
         await logTakipToSheets(2, telefon, durum);
