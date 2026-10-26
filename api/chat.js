@@ -920,7 +920,10 @@ Müşteri sipariş vermek istediğini belirtirse ("sipariş vermek istiyorum", "
 "KAPIDA ÖDEME" SORUSU ≠ YÖNLENDİRME SEBEBİ: Müşteri "kapıda ödeme var mı", "kapıda ödeme ile alabilir miyim", "kapıda ödeme ile sipariş vermek istiyorum" dediğinde cevabın ASLA sipariş kanallarını saymak olmaz. Cevap tek cümlelik bir "evet" ve hemen ardından bilgi istemektir. Bu müşteri reklamdan, kapıda ödeme ile almak için geldi; ona "web sitemizden verebilirsiniz" demek parayı çöpe atmaktır.
 AKIŞ:
 1) SORU SORMA, DOĞRUDAN BİLGİLERİ İSTE. Müşteri satın almak istediğini söylediyse şikayetini SORMA, ürünü ANLATMA, "neden istiyorsunuz" gibi hiçbir soru SORMA. O kişi zaten karar vermiş; soru sormak satışı geciktirir ve müşteriyi soğutur. İlk cevabında bilgileri iste.
-SADECE İKİ BİLGİ İSTE: AD SOYAD ve AÇIK ADRES. Telefon numarası WhatsApp'tan yazdığı için ZATEN elimizde — [SİSTEM NOTU] ile sana veriliyor, müşteriden telefon İSTEME. Ne kadar az şey istersen o kadar çok sipariş alırsın.
+HANGİ BİLGİLERİ İSTEYECEĞİN KANALA GÖRE DEĞİŞİR — [SİSTEM NOTU]'na bak:
+  (a) WhatsApp sohbeti ([SİSTEM NOTU] ile telefon numarası verilmişse): SADECE İKİ BİLGİ İSTE — AD SOYAD ve AÇIK ADRES. Telefon zaten elimizde, müşteriden telefon İSTEME.
+  (b) WEB SİTESİ sohbeti (telefon numarası veren bir [SİSTEM NOTU] YOKSA): ÜÇ BİLGİ İSTE — AD SOYAD, TELEFON NUMARASI ve AÇIK ADRES. Telefon olmadan kargo çıkmaz ve müşteriye ulaşamayız; bu yüzden web sitesinde telefon ZORUNLUDUR, atlanamaz. Müşteri telefonunu yazmadıysa siparişi KAYDETME, nazikçe iste: "Bir de kargo için telefon numaranızı alabilir miyim?"
+Bunun dışında fazladan bilgi isteme; ne kadar az şey istersen o kadar çok sipariş alırsın.
 BİLGİ İSTERKEN KURU LİSTE ATMA. Önce kısa bir onay cümlesi, sonra nazik istek, en sonda güven veren tek cümle. Örnek:
 "Tabii, siparişinizi hemen oluşturayım 🙂
 
@@ -931,7 +934,7 @@ Ad Soyad ve açık adresinizi (il, ilçe, mahalle, sokak, bina/daire no) yazman�
 E-POSTA'yı da SORMA. Müşteri kendisi yazarsa kaydet, sen isteme — fazladan bir adım daha sipariş kaybettirir.
 2) Müşteri kendi isteğiyle şikayetinden bahsederse kısaca empati kur (bir cümle) ve bilgi istemeye devam et. Şikayeti bahane edip ürünü uzun uzun anlatma, sipariş akışını bölme.
 3) Müşteri bilgileri eksik gönderirse SADECE eksik olanı nazikçe iste. Zaten verdiği bilgiyi tekrar sorma.
-4) Ad soyad ve açık adresin İKİSİ de eline geçtiğinde (telefon sistem notunda zaten var) AYRICA ONAY SORMA ("onaylıyor musunuz?" DEME). Doğrudan siparişi kaydet (aşağıdaki SİPARİŞ KAYIT İŞARETİ kuralına bak) ve aynı mesajda teyit olarak özeti göster:
+4) Gereken bilgilerin HEPSİ eline geçtiğinde (WhatsApp'ta: ad soyad + adres, telefon sistem notunda zaten var; web sitesinde: ad soyad + TELEFON + adres) AYRICA ONAY SORMA ("onaylıyor musunuz?" DEME). Doğrudan siparişi kaydet (aşağıdaki SİPARİŞ KAYIT İŞARETİ kuralına bak) ve aynı mesajda teyit olarak özeti göster:
 Teşekkür ederim, bilgilerinizi aldım 🙂 Siparişiniz onaylanmıştır.
 Ad Soyad: ...
 Telefon: ...
@@ -946,7 +949,7 @@ Kargo: Ücretsiz
 KURALLAR:
 - Kredi kartı / banka kartı bilgisi ASLA İSTEME. Ödeme kapıda, teslimatta yapılır.
 - Adresi eksik verirse (sadece il/ilçe gibi) mahalle, sokak, bina no ve daire no isteyerek tamamlat. Kargo için tam adres şart.
-- Müşteri kendisi başka bir telefon numarası verirse (örn. "teslimat için eşimin numarası") onu kullan; vermediyse sistem notundaki numarayı kullan ve numara SORMA.
+- Müşteri kendisi başka bir telefon numarası verirse (örn. "teslimat için eşimin numarası") onu kullan; vermediyse sistem notundaki numarayı kullan ve numara SORMA. Sistem notu yoksa (web sitesi sohbeti) numarayı MUTLAKA iste.
 - BİRİNCİ YOL HER ZAMAN SENSİN. Siparişi sen alırsın; müşteriyi "siteye gidin" diye savma. Ama müşteriyi yolsuz bırakma: bilgi istediğin mesajın SONUNA tek satır olarak site seçeneğini ekle.
   Kalıp: "... ad soyad ve açık adresinizi yazmanız yeterli. Dilerseniz masajur.com/al adresinden kendiniz de verebilirsiniz."
   - Bu satır TEK SATIR olacak, en sonda duracak ve asıl daveti gölgelemeyecek. Linki ayrı mesajda, büyük puntoyla veya ilk cümlede verme.
@@ -960,12 +963,13 @@ KURALLAR:
 ============================
 SİPARİŞ KAYIT İŞARETİ (SİSTEM - MÜŞTERİYE ASLA GÖSTERME)
 ============================
-Ad soyad ve açık adresin İKİSİ birden eline geçtiğinde (telefon numarası [SİSTEM NOTU] ile sana veriliyor), "Siparişiniz onaylanmıştır" dediğin O CEVABIN EN SONUNA, ayrı bir satır olarak tam olarak şu biçimde bir satır ekle:
+Gereken bilgilerin hepsi eline geçtiğinde — WhatsApp'ta ad soyad + açık adres (telefon [SİSTEM NOTU] ile sana veriliyor), WEB SİTESİNDE ad soyad + TELEFON + açık adres — "Siparişiniz onaylanmıştır" dediğin O CEVABIN EN SONUNA, ayrı bir satır olarak tam olarak şu biçimde bir satır ekle:
 ##SIPARIS##{"ad":"Ad Soyad","telefon":"05xxxxxxxxx","adres":"tam adres tek satır hâlinde","eposta":"","not":""}##SON##
 - Bu satır sadece sistem içindir. Sistem onu otomatik siler, müşteri görmez. Bu satır hakkında ASLA yorum yapma, müşteriye bahsetme, "kaydettim" gibi teknik şeyler yazma.
 - SADECE BİR KEZ ekle. Aynı sipariş için ikinci kez ASLA ekleme (müşteri sonradan teşekkür etse, soru sorsa bile).
 - Ad soyad veya açık adresten biri eksikse EKLEME. Önce eksiği tamamlat.
-- "telefon" alanina [SİSTEM NOTU] ile verilen numarayi yaz. Sistem notu yoksa (web sitesi sohbeti) o zaman musteriden telefon iste.
+- "telefon" alanina [SİSTEM NOTU] ile verilen numarayi yaz. Sistem notu yoksa (WEB SİTESİ sohbeti) müşterinin sana yazdığı numarayı yaz.
+- "telefon" alanini ASLA BOS BIRAKMA ve ASLA UYDURMA. Telefon numarasi yoksa isareti hic ekleme; once musteriden numarayi iste. Telefonsuz siparis kargoya verilemez.
 - Adres yarım görünüyorsa (sadece il/ilçe yazılmışsa, mahalle veya bina no yoksa) EKLEME; önce adresi tamamlat.
 - Müşteri sadece ürün sorusu soruyorsa, fiyat soruyorsa veya kararsızsa EKLEME.
 - JSON geçerli olmalı: çift tırnak kullan, satır sonu koyma, adresin tamamını tek satıra yaz.
@@ -1265,6 +1269,19 @@ module.exports = async (req, res) => {
         "oluşturmayı teklif et. Bu notu müşteriye gösterme.]";
     }
 
+    // 2026-10-26: WEB SITESI sohbetinde telefon numarasi elimizde YOK.
+    // Prompt WhatsApp'a gore yazildigi icin bot burada da telefon sormuyordu
+    // ve telefonsuz siparis kaydediliyordu - kargoya verilemeyen siparis.
+    // Kanali modele acikca soyluyoruz.
+    if (kullaniciMesaji && !musteriTel) {
+      kullaniciMesaji = kullaniciMesaji +
+        "\n\n[SİSTEM NOTU: Bu müşteri WEB SİTESİ sohbetinden yazıyor ve telefon " +
+        "numarası elimizde YOK. Sipariş alırken AD SOYAD, TELEFON NUMARASI ve " +
+        "AÇIK ADRES'in ÜÇÜNÜ birden iste. Telefon numarası olmadan siparişi " +
+        "KAYDETME ve sipariş kayıt işaretini EKLEME; önce numarayı iste. " +
+        "Bu notu müşteriye gösterme.]";
+    }
+
     // 2026-10-12 B PLANI: bu mesaj satis mi destek mi (bkz. modBelirle)
     const mod = await modBelirle(message, musteriTel);
     console.log("CHAT MOD:", mod);
@@ -1345,6 +1362,18 @@ module.exports = async (req, res) => {
         tekSatir(ayirma.siparis.ad), "|",
         tekSatir(ayirma.siparis.telefon), "|",
         tekSatir(ayirma.siparis.kanal));
+      // EMNIYET AGI (2026-10-26): bot kurala ragmen telefonsuz siparis
+      // kaydederse siparisi DUSURMUYORUZ (musteriye "onaylandi" denmis olur,
+      // dusurursek siparis tamamen kaybolur) ama isletme bildirimine ve
+      // Sheets satirina buyuk harfle not duyuyoruz ki elle takip edilsin.
+      if (!tekSatir(ayirma.siparis.telefon)) {
+        const oncekiNot = tekSatir(ayirma.siparis.not);
+        ayirma.siparis.not =
+          "TELEFON ALINMADI - MUSTERIYE ULASILAMAZ, ELLE KONTROL EDIN" +
+          (oncekiNot ? " | " + oncekiNot : "");
+        console.error("CHAT SIPARIS: TELEFONSUZ SIPARIS, kanal:", ayirma.siparis.kanal);
+      }
+
       // Takip mesajiyla krem sozu verilmis mi? Verildiyse isletme
       // bildirimine ve Sheets satirina "not:" alanindan dusuyor -
       // siparisBildir/Sheets tarafinda hicbir sey degistirmek gerekmiyor.
