@@ -606,6 +606,52 @@ async function takipKuyrugunaYaz(phone) {
   }
 }
 
+// ============================================================
+// VIDEO TEKLIFI DUGMELERI (2026-10-26)
+// ------------------------------------------------------------
+// api/video-teklifi.js "video_teklifi" sablonunu gonderiyor; altinda iki
+// hizli yanit dugmesi var. Dugmeye basilinca metni normal mesaj gibi
+// geliyor, bu yuzden Claude'a GITMEDEN once burada yakaliyoruz.
+// TAM ESLESME ariyoruz (kucuk harfe cevrilmis, bosluklari kirpilmis):
+// dugme metni sabit, serbest metinde yanlis eslesme olmasin.
+const VIDEO_KABUL_METNI = ["katılmak istiyorum", "katilmak istiyorum"];
+const VIDEO_RET_METNI = ["şimdilik istemiyorum", "simdilik istemiyorum"];
+const VIDEO_KAPALI = "video-kapali:";          // video-teklifi.js ile AYNI anahtar
+const VIDEO_KAPALI_OMRU = 180 * 24 * 3600;
+
+function videoKabulMu(metin) {
+  return VIDEO_KABUL_METNI.indexOf(String(metin || "").toLowerCase().trim()) !== -1;
+}
+function videoRetMi(metin) {
+  return VIDEO_RET_METNI.indexOf(String(metin || "").toLowerCase().trim()) !== -1;
+}
+
+async function videoKapat(phone) {
+  try {
+    await redis.set(VIDEO_KAPALI + phone, "1", { ex: VIDEO_KAPALI_OMRU });
+  } catch (e) {
+    console.error("VIDEO KAPATILAMADI:", e && e.message ? e.message : e);
+  }
+}
+
+async function logVideoYanitToSheets(phone, yanit) {
+  try {
+    if (!process.env.SHEETS_URL) return;
+    await fetchWithTimeout(process.env.SHEETS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "video_yanit",
+        id: "video-yanit-" + phone + "-" + yanit,
+        phone: String(phone || ""),
+        status: String(yanit || "")
+      })
+    }, 12000);
+  } catch (e) {
+    console.error("VIDEO YANIT SHEETS HATA:", e && e.message ? e.message : e);
+  }
+}
+
 // "Mesaj istemiyorum" - pazarlama sablonundaki vazgecme butonu ya da
 // musterinin kendi yazdigi acik ret. Kalici olarak isaretleniyor.
 const TAKIP_KAPAT_KALIPLARI = [
@@ -706,6 +752,34 @@ module.exports = async (req, res) => {
         "İhtiyacınız olursa buradayız."
       );
       return res.status(200).send("OK - takip kapatildi");
+    }
+
+    // VIDEO TEKLIFI DUGMELERI: Claude'a gitmesin, kalip cevap verip
+    // isletmeye haber verelim.
+    if (videoKabulMu(message)) {
+      console.log("VIDEO TEKLIFI KABUL:", phone);
+      await duzMetinGonder(
+        phone,
+        "Harika, çok teşekkür ederiz 🙂 Ekibimiz en kısa sürede sizinle " +
+        "iletişime geçip video gönderim detaylarını ve ödül tercihinizi konuşacak."
+      );
+      for (const num of ALERT_NUMBERS) {
+        await sendAlertTo(num, phone, "VIDEO TEKLIFINI KABUL ETTI - memnuniyet videosu cekmek istiyor, detaylari paylasin");
+      }
+      await logVideoYanitToSheets(phone, "KABUL");
+      return res.status(200).send("OK - video teklifi kabul");
+    }
+
+    if (videoRetMi(message)) {
+      console.log("VIDEO TEKLIFI RET:", phone);
+      await videoKapat(phone);
+      await duzMetinGonder(
+        phone,
+        "Tabii, anlıyoruz 🙂 Bir daha bu konuda yazmayacağız. " +
+        "Başka bir ihtiyacınız olursa buradayız."
+      );
+      await logVideoYanitToSheets(phone, "RET");
+      return res.status(200).send("OK - video teklifi ret");
     }
 
     // Mukerrer isleme korumasi - ayni mesaj (wamid) daha once islendiyse dur.
