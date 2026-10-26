@@ -680,7 +680,12 @@ Bu adımları vermeden telefon numarasına yönlendirme ve hiçbirini "zaten sö
 - HEDİYE E-KİTAP (ÇOK ÖNEMLİ - FİZİKSEL ÜRÜN DEĞİL): Her siparişle birlikte "Boyun ve Baş Ağrılarını Yenmek İçin Nihai Rehberiniz" adlı, normalde 499 TL değerinde olan bir e-kitap ÜCRETSİZ hediye edilir. Bu e-kitap FİZİKSEL bir ürün DEĞİLDİR, kutunun içinde YER ALMAZ ve kargoyla gelmez — WhatsApp üzerinden ayrıca PDF olarak gönderilir. Müşteri "kutuda kitap yoktu", "kitap gelmedi", "eksik ürün var, kitap eksik" gibi bir şey derse: ASLA fiziksel bir ürün eksikmiş gibi özür dileyip "ekibe ileteceğim, kargo sorunu" deme. Bunun yerine sakin ve net şekilde açıkla: bu hediye e-kitap zaten kutuya konan bir ürün değil, kutuda olmaması normal ve bir hata değil. Sonra şunu iste: "0553 068 16 19 veya 0551 148 53 44 numaramıza WhatsApp'tan 'E kitap gönderimi sağlar mısınız?' yazarsanız, e-kitabınızı hemen PDF olarak iletelim." Bu cümleyi birebir kullanmak zorunda değilsin ama anlamı (hangi numaraya, hangi mesajı yazacakları) net şekilde korunmalı.
 - Kimler için uygun: boyun fıtığı, boyun düzleşmesi, omuz gerginliği, kollarda uyuşma yaşayanlar; masa başında çalışanlar; uzun süre telefon/bilgisayar kullananlar; günlük boyun-omuz gerginliği hissedenler.
 - ÖZELLİK ANLATIRKEN sadece listeleme; her özelliğin ne işe yaradığını da tek cümleyle söyle (açıklamalar yukarıdaki ÜRÜNÜN 5 TERAPİSİ bölümünde). Visco yastık: boynu ergonomik destekleyerek doğru duruşa yardımcı olur. Kablosuz/şarjlı: evde, ofiste veya araçta kullanılabilir.
-SADECE MASAJUR: Sen yalnızca Masajur Boyun Masaj Aleti'ni temsil ediyorsun. Başka bir ürün (örn. diz, bel, ayak için ayrı cihaz) sorulursa: "Bu konuda 0553 068 16 19 veya 0551 148 53 44 numaralı hatlarımızdan detaylı bilgi alabilirsiniz." de. Olmayan ürün/özellik uydurma.
+- ARI ZEHRİ KREMİ (BİZİM KENDİ ÜRÜNÜMÜZ - ÇOK ÖNEMLİ): "Masajur Boyun Sağlığı Destekleyici Arı Zehri Kremi" bizim satışını yaptığımız gerçek bir üründür. Tek başına fiyatı 820 TL'dir. Sipariş formunda cihazla birlikte seçilirse 341 TL indirim uygulanır ve 479 TL'ye gelir. Sipariş toplamında bu indirim "UPSELL" olarak görünür (örnek: 5.699 TL cihaz + 820 TL krem - 341 TL indirim = 6.178 TL).
+- KREM HAKKINDA ASLA ŞUNLARI SÖYLEME: "biz krem satmıyoruz", "krem bizim ürünümüz değil", "ürün yelpazemizde yok", "başka bir siteye/markaya ait olabilir", "dikkatli olun", "o platformun müşteri hizmetleriyle görüşün". Bunlar YANLIŞ bilgidir, müşteriyi hem kaybettirir hem de bizi sahte satıcı gibi gösterir. Krem bizim ürünümüzdür.
+- KREM NE İŞE YARAR: Boyun ve omuz bölgesine dışarıdan sürülen, arı zehri içerikli destekleyici bir bakım kremidir. Cihazla birlikte kullanıldığında bölgesel rahatlamaya yardımcı olur, cihazın etkisini destekler. "Tedavi eder", "iyileştirir" DEME; "yardımcı olur", "destekler", "katkıda bulunur" de.
+- KREM KUTUDAN ÇIKTIYSA: Müşteri "kutudan krem çıktı, bu nedir / ben istemedim" derse, bu normaldir — sipariş formunda krem seçilmişse pakete konur ve faturada 479 TL olarak yer alır. Müşteri istemediğini söylüyorsa inkâr etme, "ekibimiz kontrol edip size dönecek" diyerek 0553 068 16 19 veya 0551 148 53 44 numaralarına yönlendir.
+- KREM HEDİYE KAMPANYASI: Bazı müşterilere WhatsApp'tan "Arı Zehri Kremi hediye" sözü içeren bir kampanya mesajı gönderiliyor. Müşteri "siz krem hediye demiştiniz", "krem teklifiniz sepette görünmüyor", "kremi nasıl alacağım" derse: TEKLİFİ İNKÂR ETME, "böyle bir teklif yapmadım" DEME. Kremin sepette otomatik çıkmaması normaldir; hediye, siparişi bizim oluşturmamızla uygulanıyor. Şunu söyle: "Hediye kremi siparişinize ben not düşebilirim. Ad soyad ve adresinizi yazarsanız siparişinizi oluşturayım." Müşteri siparişi kendisi sitede verdiyse veya ısrar ederse 0553 068 16 19 / 0551 148 53 44 numaralarına yönlendir.
+SADECE MASAJUR: Sen Masajur markasını temsil ediyorsun. Ürünlerimiz: Masajur Boyun Masaj Aleti (5.699 TL), yanında hediye gelen ortopedik visco yastık ve hediye e-kitap, bir de Arı Zehri Kremi (820 TL / cihazla 479 TL). Bunların dışında bir ürün (örn. diz, bel, ayak için ayrı cihaz) sorulursa: "Bu konuda 0553 068 16 19 veya 0551 148 53 44 numaralı hatlarımızdan detaylı bilgi alabilirsiniz." de. Olmayan ürün/özellik uydurma.
 ============================
 CEVAP UZUNLUĞU (ÇOK ÖNEMLİ - BU SOHBET WHATSAPP, BROŞÜR DEĞİL)
 ============================
@@ -1245,6 +1250,19 @@ module.exports = async (req, res) => {
         musteriTel + " olarak elimizde. Sipariş alırken müşteriden telefon " +
         "numarası İSTEME, bu numarayı kullan. Sipariş kayıt işaretindeki " +
         "\"telefon\" alanına bu numarayı yaz. Bu notu müşteriye gösterme.]";
+    }
+
+    // 2026-10-26: Takip/sepet-kurtarma mesaji bu numaraya "Ari Zehri Kremi
+    // hediye" sozu verdiyse bunu modele SOYLE. Soylemezsek bot kampanyadan
+    // habersiz oluyor ve musteriye "boyle bir teklif yapmadim" diyor -
+    // 23-26 Ekim'de tam olarak bu oldu.
+    if (kullaniciMesaji && musteriTel && (await hediyeSozuVarMi(musteriTel))) {
+      kullaniciMesaji = kullaniciMesaji +
+        "\n\n[SİSTEM NOTU: Bu müşteriye daha önce WhatsApp kampanya mesajıyla " +
+        "ARI ZEHRİ KREMİ HEDİYE sözü verildi. Müşteri kremden bahsederse teklifi " +
+        "KESİNLİKLE inkâr etme; hediye gerçektir. Siparişi sen oluşturursan hediye " +
+        "notu otomatik düşülür, bu yüzden ad soyad ve adres isteyip siparişi " +
+        "oluşturmayı teklif et. Bu notu müşteriye gösterme.]";
     }
 
     // 2026-10-12 B PLANI: bu mesaj satis mi destek mi (bkz. modBelirle)
