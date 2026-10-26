@@ -762,10 +762,75 @@ async function handleSiparisKontrol(req, res) {
   }
 }
 
+// ============ TEK NUMARA KARAR KONTROLU (hicbir mesaj gondermez) ============
+// 2026-10-26: mod=test tum kuyrugu tarayip her aday icin onlarca Redis cagrisi
+// yaptigi icin tarayicida acilmiyordu. Bu mod SADECE verilen numara icin
+// asamaBelirle()'yi calistirip kararin sebebini ve - en onemlisi - kuyruktan
+// gelen uyenin JS tipini yaziyor. Sayi/metin karisikligini burada goruyoruz.
+async function handleKarar(req, res) {
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) return res.status(401).send("Unauthorized");
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+
+  const aranan = normalizeTelefon((req.query && req.query.telefon) || "");
+  if (!aranan) return res.status(200).send("telefon parametresi gerekli.");
+
+  siparisTelefonCache = null;
+  let c = "=== TEK NUMARA KARAR KONTROLU (MESAJ GONDERILMEDI) ===\n";
+  c += "Aranan numara : " + aranan + "\n";
+
+  try {
+    // 1) Kuyrukta ham uye hangi tipte duruyor?
+    let hamTip = "kuyrukta yok";
+    let hamDeger = "-";
+    try {
+      const duz = await redis.zrange(KUYRUK, 0, -1, { withScores: true });
+      if (Array.isArray(duz)) {
+        for (let i = 0; i < duz.length; i += 2) {
+          if (String(duz[i]) === aranan) {
+            hamTip = typeof duz[i];
+            hamDeger = String(duz[i]);
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      hamTip = "okunamadi: " + (e && e.message ? e.message : e);
+    }
+    c += "Kuyruktaki tip: " + hamTip + " (deger: " + hamDeger + ")\n";
+
+    // 2) Duzeltmenin asil kaniti: metne cevrilmis haliyle elemeler calisiyor mu?
+    c += "ALERT_NUMBERS.includes -> " + ALERT_NUMBERS.includes(aranan) + "\n";
+    const siparisliler = await siparisVerenTelefonlar();
+    if (siparisliler === "HATA") {
+      c += "Siparis gecmisi: >>> OKUNAMADI <<<\n";
+    } else {
+      c += "Siparis kumesi : " + siparisliler.size + " telefon, bu numara iceride mi -> " +
+        siparisliler.has(aranan) + "\n";
+    }
+
+    // 3) Gercek karar.
+    const ms = await sonMesajZamani(aranan);
+    const yas = ms ? (Date.now() - ms) / 3600000 : 999;
+    const { asama, sebep, sil } = await asamaBelirle(aranan, yas);
+    c += "Son mesaj     : " + (ms ? yas.toFixed(1) + " saat once" : "kayit yok") + "\n";
+    c += "KARAR         : " + (asama === 0 ? "MESAJ YOK" : asama + ". ASAMA GIDERDI") +
+      " - " + sebep + "\n";
+    c += "Kuyruktan sil : " + !!sil + "\n";
+    return res.status(200).send(c);
+  } catch (e) {
+    return res.status(200).send(c + "\nHATA: " + (e && e.message ? e.message : e));
+  }
+}
+
 // ============ GERCEK CALISMA ============
 module.exports = async (req, res) => {
   if (req.method === "GET" && req.query && req.query.mod === "test") {
     return handleTest(req, res);
+  }
+
+  if (req.method === "GET" && req.query && req.query.mod === "karar") {
+    return handleKarar(req, res);
   }
 
   if (req.method === "GET" && req.query && req.query.mod === "siparis-kontrol") {
