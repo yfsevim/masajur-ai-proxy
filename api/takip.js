@@ -681,10 +681,83 @@ async function handleSimdiGonder(req, res) {
   }
 }
 
+// ============ TESHIS: SIPARIS GECMISI KONTROLU ============
+// GET ?mod=siparis-kontrol&telefon=905...&secret=...
+// 2026-10-26: siparis vermis bir musteriye (#14008 / 905337056888) takip
+// mesaji gitti. Eleme calismamis. Bu mod, elemeyi besleyen Shopify
+// sorgusunu adim adim gosteriyor: kac sayfa okundu, kac siparis geldi,
+// kac telefon cikarilabildi ve aranan numara kumede var mi.
+async function handleSiparisKontrol(req, res) {
+  const secret = req.query && req.query.secret;
+  if (secret !== SECRET) return res.status(401).send("Unauthorized");
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+
+  const aranan = normalizeTelefon((req.query && req.query.telefon) || "");
+  if (!aranan) return res.status(200).send("telefon parametresi gerekli.");
+
+  try {
+    const kume = new Set();
+    const minDate = new Date(Date.now() - SIPARIS_GECMISI_GUN * 24 * 3600 * 1000).toISOString();
+    let url = `https://${process.env.SHOPIFY_STORE}/admin/api/${API_VERSION}/orders.json` +
+      `?status=any&limit=250&created_at_min=${encodeURIComponent(minDate)}` +
+      `&fields=id,name,phone,customer,shipping_address,billing_address`;
+
+    let sayfa = 0, toplamSiparis = 0, telefonsuz = 0;
+    const eslesen = [];
+    while (url && sayfa < SIPARIS_SAYFA_LIMITI) {
+      const r = await fetchWithTimeout(url, {
+        headers: {
+          "X-Shopify-Access-Token": process.env.SHOPIFY_TOKEN,
+          "Content-Type": "application/json"
+        }
+      }, 20000);
+      if (!r.ok) {
+        const g = await r.text().catch(() => "");
+        return res.status(200).send("Shopify HTTP " + r.status + " - " + g.slice(0, 300));
+      }
+      const data = await r.json().catch(() => ({}));
+      const liste = Array.isArray(data.orders) ? data.orders : [];
+      toplamSiparis += liste.length;
+      for (const o of liste) {
+        const t = telefonCikar(o);
+        if (!t) { telefonsuz++; continue; }
+        kume.add(t);
+        if (t === aranan) {
+          eslesen.push((o.name || o.id) + " (sayfa " + (sayfa + 1) + ")");
+        }
+      }
+      const link = r.headers.get("link");
+      url = sonrakiSayfaUrl(link);
+      sayfa++;
+    }
+
+    let c = "=== SIPARIS GECMISI KONTROLU ===\n";
+    c += "Aranan numara   : " + aranan + "\n";
+    c += "Pencere         : son " + SIPARIS_GECMISI_GUN + " gun (" + minDate.slice(0, 10) + " sonrasi)\n";
+    c += "Okunan sayfa    : " + sayfa + " (limit " + SIPARIS_SAYFA_LIMITI + ")\n";
+    c += "Okunan siparis  : " + toplamSiparis + "\n";
+    c += "Telefonu cikmayan siparis: " + telefonsuz + "\n";
+    c += "Kumedeki telefon: " + kume.size + "\n\n";
+    c += eslesen.length
+      ? "SONUC: numara kumede VAR. Eslesen siparisler: " + eslesen.join(", ") + "\n" +
+        "Yani eleme calismali. Mesaj yine de gittiyse sebep baska yerde.\n"
+      : "SONUC: numara kumede YOK. Eleme bu yuzden calismadi.\n" +
+        "Sayfa sayisi limite dayandiysa pencere kirpilmis olabilir;\n" +
+        "telefonsuz siparis sayisi yuksekse telefon alanlari okunamiyor demektir.\n";
+    return res.status(200).send(c);
+  } catch (e) {
+    return res.status(200).send("HATA: " + (e && e.message ? e.message : e));
+  }
+}
+
 // ============ GERCEK CALISMA ============
 module.exports = async (req, res) => {
   if (req.method === "GET" && req.query && req.query.mod === "test") {
     return handleTest(req, res);
+  }
+
+  if (req.method === "GET" && req.query && req.query.mod === "siparis-kontrol") {
+    return handleSiparisKontrol(req, res);
   }
 
   if (req.method === "GET" && req.query && req.query.mod === "simdi-gonder") {
