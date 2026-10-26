@@ -46,7 +46,18 @@ const TEMPLATE_LANG = "tr";
 const PENCERE_BAS_GUN = 13;
 const PENCERE_SON_GUN = 16;
 
-const PARTI_LIMITI = 10;
+// BASLANGIC TARIHI (2026-10-26)
+// Sistem bugun kuruldu ve penceresinde HAZIRDA ~73 eski siparis vardi.
+// Onlara toplu teklif gitmesi istenmedi: bu tarihten ONCE verilmis hicbir
+// siparise teklif gonderilmiyor. Yani ilk teklifler, bugunden sonra
+// siparis veren musteriler 13 gunu doldurdugunda (kabaca 8 Kasim)
+// baslayacak. Tarihi ileride degistirmek isterseniz tek satir yeterli.
+const BASLANGIC_TARIHI = "2026-10-26T00:00:00Z";
+
+// Gunluk siparis ~18-20; 4 gunluk pencereyi takip edebilmek icin limit
+// bunun uzerinde olmali, yoksa her gun geride kalinir ve musteriler
+// pencereden dusup hic teklif almaz.
+const PARTI_LIMITI = 25;
 
 // --- Redis ---
 const GONDERILDI = "video-teklifi:";     // <telefon>
@@ -149,8 +160,16 @@ function sonrakiSayfaUrl(linkHeader) {
 
 // Penceredeki KARGOYA VERILMIS siparisleri getir
 async function pencereSiparisleri() {
-  const min = new Date(Date.now() - PENCERE_SON_GUN * 24 * 3600 * 1000).toISOString();
-  const max = new Date(Date.now() - PENCERE_BAS_GUN * 24 * 3600 * 1000).toISOString();
+  const pencereAlt = Date.now() - PENCERE_SON_GUN * 24 * 3600 * 1000;
+  const pencereUst = Date.now() - PENCERE_BAS_GUN * 24 * 3600 * 1000;
+  const baslangic = Date.parse(BASLANGIC_TARIHI);
+
+  // Baslangic tarihinden onceki siparisler HIC sorgulanmiyor.
+  const altSinir = Math.max(pencereAlt, baslangic);
+  if (altSinir >= pencereUst) return [];   // pencere henuz baslangic tarihine gelmedi
+
+  const min = new Date(altSinir).toISOString();
+  const max = new Date(pencereUst).toISOString();
   let url = "https://" + process.env.SHOPIFY_STORE + "/admin/api/" + API_VERSION +
     "/orders.json?status=any&fulfillment_status=shipped&limit=250" +
     "&created_at_min=" + encodeURIComponent(min) +
@@ -298,6 +317,9 @@ async function handleTest(req, res) {
     const siparisler = await pencereSiparisleri();
     let cikti = "=== VIDEO TEKLIFI (TEST MODU - HICBIR MESAJ GONDERILMEDI) ===\n";
     cikti += "Pencere     : siparis tarihi " + PENCERE_BAS_GUN + "-" + PENCERE_SON_GUN + " gun once\n";
+    cikti += "Baslangic   : " + BASLANGIC_TARIHI.slice(0, 10) +
+      " oncesi siparislere teklif GITMEZ (birikmis eski siparisler haric tutuldu)\n";
+    cikti += "Parti limiti: tek calismada en fazla " + PARTI_LIMITI + " mesaj\n";
     cikti += "Sablon      : " + TEMPLATE + " (" + TEMPLATE_LANG + ")\n";
     cikti += "Sessiz saat : " + SESSIZ_BASLANGIC + ":00 - " + SESSIZ_BITIS + ":00. Su an TR " +
       turkiyeSaati() + ":00" + (sessizSaatteMiyiz() ? "  >>> SESSIZ <<<" : "") + "\n";
