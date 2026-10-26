@@ -63,6 +63,28 @@ const SERBEST_METIN_SON_SAAT = 23;
 // --- Guvenlik sinirlari ---
 const PARTI_LIMITI = 10;
 
+// --- SESSIZ SAAT (2026-10-26) ---
+// Ilk gun 129 mesajin ~45'i gece 22:00-08:00 arasinda gitti: musteri
+// 23:30'da yaziyor, 3,5 saat sonra saat 03:00 oluyor ve sistem mesaji
+// atiyor. Kural dogru calisiyordu ama sonucu kotu - uyuyan insana satis
+// mesaji gidiyor, engellenme/sikayet WhatsApp kalite puanini dusuruyor,
+// gece okunan mesaj zaten donusmuyor.
+// Simdi: bu saatlerin disinda hicbir takip mesaji gonderilmiyor. Bayrak
+// ATILMIYOR, kuyruktan SILINMIYOR - kisi sabah 09:00'daki ilk calismada
+// normal sirasiyla yakalaniyor.
+const SESSIZ_BASLANGIC = 22;   // 22:00'den itibaren gonderim yok
+const SESSIZ_BITIS = 9;        // 09:00'da tekrar basliyor
+
+// Vercel UTC calisiyor, Turkiye UTC+3 (yaz saati uygulamasi yok).
+function turkiyeSaati() {
+  return (new Date().getUTCHours() + 3) % 24;
+}
+
+function sessizSaatteMiyiz() {
+  const s = turkiyeSaati();
+  return s >= SESSIZ_BASLANGIC || s < SESSIZ_BITIS;
+}
+
 // --- Siparis gecmisi kontrolu ---
 const SIPARIS_GECMISI_GUN = 30;
 const SIPARIS_SAYFA_LIMITI = 8;           // 8 x 250 = 2000 siparis tavan
@@ -501,6 +523,9 @@ async function handleTest(req, res) {
     let cikti = "=== TAKIP MESAJI (TEST MODU - HICBIR MESAJ GONDERILMEDI) ===\n";
     cikti += "Kurallar: " + ASAMA1_SAAT + ". saatte hediye metni, " + ASAMA2_SAAT +
       ". saatte indirim sablonu, " + MAX_YAS_SAAT + " saatten eskiye dokunulmaz\n";
+    cikti += "Sessiz saat   : " + SESSIZ_BASLANGIC + ":00 - " + SESSIZ_BITIS +
+      ":00 arasi gonderim YOK. Su an Turkiye saati " + turkiyeSaati() + ":00" +
+      (sessizSaatteMiyiz() ? "  >>> SESSIZ SAATTEYIZ, su an mesaj gitmez <<<" : "") + "\n";
     cikti += "Kuyrukta toplam  : " + tumKuyruk.length + " numara\n";
     cikti += "Suresi dolan     : " + adaylar.length + " numara (" + ASAMA1_SAAT + " saati gecenler)\n";
 
@@ -676,6 +701,16 @@ module.exports = async (req, res) => {
   if (secret !== SECRET) {
     console.error("TAKIP: gecersiz secret");
     return res.status(401).send("Unauthorized");
+  }
+
+  // Sessiz saat: hicbir sey gondermeden cik. Kuyruk olduğu gibi kaliyor.
+  if (sessizSaatteMiyiz()) {
+    const s = turkiyeSaati();
+    console.log("TAKIP: sessiz saat (" + s + ":00), gonderim yok");
+    return res.status(200).send(
+      "OK - sessiz saat (" + s + ":00). Gonderim " + SESSIZ_BITIS +
+      ":00 - " + SESSIZ_BASLANGIC + ":00 arasinda yapiliyor."
+    );
   }
 
   siparisTelefonCache = null;
