@@ -396,6 +396,9 @@ async function logTakipToSheets(asama, telefon, durum) {
 // Yalnizca ZAMAN kontrollerini ve kendi numara elemesini atlatir; opt-out,
 // siparis, destek, ret gibi GERCEK guvenlik elemeleri aynen calisir.
 async function asamaBelirle(telefon, yasSaat, zorla) {
+  // Ikinci emniyet: cagiran taraf sayi gecirse bile metne ceviriyoruz.
+  // Asagidaki includes/has kontrolleri metin bekliyor (bkz. adaylariGetir).
+  telefon = telefon == null ? "" : String(telefon);
   if (!telefon) return { asama: 0, sebep: "telefon yok", sil: true };
   if (!zorla && ALERT_NUMBERS.includes(telefon)) {
     return { asama: 0, sebep: "kendi numaramiz", sil: true };
@@ -479,7 +482,16 @@ async function adaylariGetir() {
   try {
     // Upstash: zrange(key, min, max, { byScore: true })
     const uyeler = await redis.zrange(KUYRUK, 0, tavan, { byScore: true });
-    return Array.isArray(uyeler) ? uyeler : [];
+    if (!Array.isArray(uyeler)) return [];
+    // 2026-10-26 KRITIK DUZELTME: Upstash istemcisi degerleri otomatik JSON
+    // cozuyor; "905337056888" gibi tamamen rakamdan olusan bir uye buradan
+    // SAYI olarak donuyor. Metin birlestirmesiyle yapilan kontroller
+    // (redis.get("takip-kapali:" + telefon)) bundan etkilenmiyordu, ama
+    // ALERT_NUMBERS.includes(telefon) ve siparisliler.has(telefon) her zaman
+    // false donuyordu - yani "kendi numaramiz" ve "siparis vermis musteri"
+    // elemeleri SESSIZCE CALISMIYORDU. Gercek vaka: siparis #14008
+    // (905337056888) ve kendi numaramiz 905530681619 takip mesaji aldi.
+    return uyeler.map(function (u) { return String(u); });
   } catch (e) {
     console.error("TAKIP: kuyruk okunamadi:", e && e.message ? e.message : e);
     return [];
