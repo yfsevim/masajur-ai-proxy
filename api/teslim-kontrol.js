@@ -84,6 +84,24 @@ function sabahaKalanSaat() {
   if (h >= 8) return null;
   return Math.max(1, 8 - h);
 }
+// --- SESSIZ SAAT (2026-10-27) ---
+// 22:00 - 09:00 arasi MUSTERIYE mesaj gonderilmiyor.
+// Yukaridaki geceMi() (00:00-08:00) bundan AYRI bir sey: o, Yurtici'ye bos
+// yere sorgu atmamak icindir ve fatura akisini ilgilendirir - ona dokunulmadi.
+// Bu fonksiyon SADECE musteri mesajlarini durduruyor:
+//   teslim_basarisiz, kapidan_donen_kurtarma, teslimat_gunu_hatirlatma,
+//   teslimat_rehber
+// Isletmeye giden kapidan_donen_alarm bilerek DISARIDA - o bir ic uyari.
+// Durduruldugunda hicbir Redis bayragi atilmiyor; bir sonraki tarama/recheck
+// 09:00'dan sonra ayni siparisi tekrar yakalayip mesaji gonderiyor.
+const SESSIZ_BASLANGIC = 22;
+const SESSIZ_BITIS = 9;
+
+function sessizSaatteMiyiz() {
+  const h = istanbulSaati();
+  return h >= SESSIZ_BASLANGIC || h < SESSIZ_BITIS;
+}
+
 function recheckGecikmesi(deneme, dagitimda) {
   const gece = sabahaKalanSaat();
   if (gece !== null) return gece + "h";   // once sabahi bekle
@@ -549,6 +567,11 @@ async function logKapidanDonenMesajToSheets(orderNumber, name, phone, sebep, mus
 
 // Kurye teslim edemedi (orn. AAB/MSA) -> musteriye "subeden teslim alabilirsiniz" mesaji
 async function sendTeslimBasarisizMesaji(phone, name, orderNumber, branch) {
+  if (sessizSaatteMiyiz()) {
+    console.log("TESLIM BASARISIZ: sessiz saat (" + istanbulSaati() +
+      ":00), gonderilmedi, 09:00 sonrasina birakildi:", orderNumber);
+    return "SESSIZ";
+  }
   let waStatus;
   try {
     const resp = await fetchWithTimeout(
@@ -692,6 +715,11 @@ function temizleParam_(v, varsayilan) {
 
 // Musteriye: "siparisiniz bugun teslim edilecek" (kapida vazgecmeyi azaltmak icin)
 async function sendTeslimatGunuMesaji(phone, name, orderNumber) {
+  if (sessizSaatteMiyiz()) {
+    console.log("TESLIMAT GUNU: sessiz saat (" + istanbulSaati() +
+      ":00), gonderilmedi, 09:00 sonrasina birakildi:", orderNumber);
+    return "SESSIZ";
+  }
   if (!phone) {
     console.log("TESLIMAT GUNU: telefon yok, mesaj gonderilemedi:", orderNumber);
     return false;
@@ -809,6 +837,11 @@ async function sendRehberMesaji(phone, name, orderNumber) {
 // bayragi atilmis durumda, bu satir yazilamasa bile akista hicbir sey degismez.
 async function sendRehberMesajiGuvenli(phone, name, orderNumber, kaynak) {
   const nereden = kaynak || "teslimat";
+  if (sessizSaatteMiyiz()) {
+    console.log("REHBER: sessiz saat (" + istanbulSaati() +
+      ":00), gonderilmedi, 09:00 sonrasina birakildi:", orderNumber);
+    return false;   // bayrak atilmiyor, bir sonraki taramada tekrar denenecek
+  }
   try {
     if (!phone) {
       console.log("REHBER: telefon yok, gonderilemedi:", orderNumber);
@@ -933,6 +966,15 @@ async function sendKapidanDonenAlarm(orderNumber, musteriAdi, musteriTelefon, se
 }
 
 async function isaretleIadeGorulduSirkete(orderNumber, iadeSebebi, phone, name) {
+  // Sessiz saatte HICBIR SEY yapilmiyor - Redis bayragi da atilmiyor, cunku
+  // bayrak atilirsa musteriye giden "paketiniz dondu, yeniden gonderelim mi?"
+  // mesaji bir daha hic gitmez. Bir sonraki tarama/recheck 09:00 sonrasi bu
+  // siparisi yeniden yakalayip hepsini bir arada yapacak.
+  if (sessizSaatteMiyiz()) {
+    console.log("KAPIDAN DONEN: sessiz saat (" + istanbulSaati() +
+      ":00), islem 09:00 sonrasina birakildi:", orderNumber);
+    return;
+  }
   try {
     await redis.set("sirkete-iade-gorundu:" + orderNumber, "1", { ex: 90 * 24 * 3600 });
   } catch (e) {}
@@ -1170,9 +1212,13 @@ async function handleTarama(req, res) {
               (order.customer && ((order.customer.first_name || "") + " " + (order.customer.last_name || "")).trim()) ||
               (order.shipping_address && order.shipping_address.name) ||
               "";
-            await sendTeslimatGunuMesaji(dagitimTelefon, dagitimMusteriAdi, String(no));
-            await markNotifiedTeslimatGunu(String(no));
-            bildirimSayisi++;
+            const tgSonuc = await sendTeslimatGunuMesaji(dagitimTelefon, dagitimMusteriAdi, String(no));
+            // "SESSIZ" = gece, hic gonderilmedi. Bayrak atilmiyor ki
+            // 09:00 sonraki taramada tekrar denensin.
+            if (tgSonuc !== "SESSIZ") {
+              await markNotifiedTeslimatGunu(String(no));
+              bildirimSayisi++;
+            }
             detaylar.push(no + ":TESLIMAT-GUNU");
           } else {
             detaylar.push(no + ":DAGITIMDA");
@@ -1189,9 +1235,11 @@ async function handleTarama(req, res) {
               (order.customer && ((order.customer.first_name || "") + " " + (order.customer.last_name || "")).trim()) ||
               (order.shipping_address && order.shipping_address.name) ||
               "Merhaba";
-            await sendTeslimBasarisizMesaji(phone, musteriAdi, String(no), detail.branch);
-            await markNotifiedFailed(String(no));
-            bildirimSayisi++;
+            const tbSonuc = await sendTeslimBasarisizMesaji(phone, musteriAdi, String(no), detail.branch);
+            if (tbSonuc !== "SESSIZ") {
+              await markNotifiedFailed(String(no));
+              bildirimSayisi++;
+            }
             detaylar.push(no + ":BILDIRIM(" + detail.reasonId + ")");
           }
         }
@@ -1331,8 +1379,8 @@ module.exports = async (req, res) => {
       if (!zatenBildirildi) {
         console.log("TESLIM-KONTROL: paket dagitima cikti (" + detail.reasonId + "), teslimat gunu mesaji gonderiliyor:", orderNumber);
         const musteriAdi = (name && name !== "Merhaba") ? name : "";
-        await sendTeslimatGunuMesaji(phone, musteriAdi, orderNumber);
-        await markNotifiedTeslimatGunu(orderNumber);
+        const tgSonuc2 = await sendTeslimatGunuMesaji(phone, musteriAdi, orderNumber);
+        if (tgSonuc2 !== "SESSIZ") await markNotifiedTeslimatGunu(orderNumber);
       }
     }
 
@@ -1342,8 +1390,8 @@ module.exports = async (req, res) => {
       const already = await alreadyNotifiedFailed(orderNumber);
       if (!already) {
         console.log("TESLIM-KONTROL: teslim basarisiz (" + detail.reasonId + "), bildirim gonderiliyor:", orderNumber);
-        await sendTeslimBasarisizMesaji(phone, name, orderNumber, detail.branch);
-        await markNotifiedFailed(orderNumber);
+        const tbSonuc2 = await sendTeslimBasarisizMesaji(phone, name, orderNumber, detail.branch);
+        if (tbSonuc2 !== "SESSIZ") await markNotifiedFailed(orderNumber);
       }
     }
 
