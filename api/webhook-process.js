@@ -54,6 +54,7 @@
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
 const yurtici = require("../lib/yurtici");
+const { siparisBilgisi } = require("../lib/siparis");
 
 const BASE = "https://masajur-ai-proxy.vercel.app";
 const SECRET = "masajur_yakkoholding_2128";
@@ -823,9 +824,14 @@ module.exports = async (req, res) => {
     if (orderNumber) {
       console.log("SIPARIS SORGUSU:", orderNumber);
 
-      const sipPromise = jsonFetch(BASE + "/api/siparis", { orderNumber, phone: phone }, 8000)
+      // 2026-11-05 GUVENLIK: Artik ayri bir HTTP cagrisi degil, dogrudan
+      // lib/siparis.js cagriliyor (tipki asagidaki getKargoInfo gibi).
+      // Eskiden POST /api/siparis kullaniliyordu; o adres internete tamamen
+      // acikti, adresi bilen herkes siparis numaralarini deneyip baskasinin
+      // siparis bilgisini cekebiliyordu. O kapi tamamen kapandi.
+      const sipPromise = siparisBilgisi({ orderNumber: orderNumber, phone: phone })
         .then((d) => { console.log("SIPARIS SONUCU:", JSON.stringify(d)); return d; })
-        .catch((e) => { console.error("SIPARIS HATA:", e?.message || e); return null; });
+        .catch((e) => { console.error("SIPARIS HATA:", (e && e.message) || e); return null; });
 
       // Artik ayri bir HTTP cagrisi degil, dogrudan yukaridaki getKargoInfo()
       // fonksiyonu cagriliyor - hem daha hizli hem daha guvenilir.
