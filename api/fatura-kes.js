@@ -76,6 +76,20 @@ async function releaseFaturaLock(orderNumber) {
 // Redis "fatura-kesildi" bayragina ve Shopify etiketine bakip cikiyor.
 const TEKRAR_GECIKMELERI = ["2m", "5m", "15m", "30m", "1h", "2h", "4h", "8h"];
 
+// 2026-11-05: Mysoft'un reddi iki turlu olabilir:
+//   (a) GECICI - sunucu hatasi, kota, kesinti. Tekrar denemek mantikli.
+//   (b) KALICI - veri/dogrulama hatasi (zorunlu alan eksik, format yanlis,
+//       "2 haneden az olamaz" gibi). Ayni veriyi 8 kez gondermenin faydasi
+//       yok; sadece sorunun fark edilmesini geciktiriyor ve siparis sessizce
+//       faturasiz kaliyor. #14182 vakasi tam olarak buydu.
+// Supheli durumda KALICI saymak daha guvenli: en kotu ihtimalle gereksiz bir
+// alarm yazilir, ama hicbir siparis sessizce kaybolmaz.
+function kaliciDogrulamaHatasiMi(mesaj) {
+  const m = String(mesaj || "").toLowerCase();
+  if (!m) return false;
+  return /olamaz|gecersiz|ge\u00e7ersiz|hatali|hatal\u0131|zorunlu|girilmelidir|bos birak|bo\u015f b\u0131rak|uygun degil|uygun de\u011fil|format|not supplied|required|invalid|must be/.test(m);
+}
+
 async function planlaTekrarDeneme(orderNumber, sonrakiDeneme, sebep) {
   if (sonrakiDeneme > TEKRAR_GECIKMELERI.length) return false;
   if (!process.env.QSTASH_TOKEN) {
@@ -478,7 +492,12 @@ async function mysoftFaturaOlustur(payload) {
       streetName: payload.aliciAdres || undefined,
       countryName: "TÜRKİYE",
       telephone1: payload.aliciTelefon || undefined,
-      email1: payload.aliciEmail || undefined
+      email1: payload.aliciEmail || undefined,
+      // 2026-11-05: ad/soyad ayrimini ARTIK BIZ belirtiyoruz. Bos birakilirsa
+      // Mysoft accountName'i kendi boluyor ve ilk kelimeyi "Ad" sayiyor.
+      personInfo: (payload.aliciAd && payload.aliciSoyad)
+        ? { firstName: payload.aliciAd, familyName: payload.aliciSoyad }
+        : undefined
     },
     invoiceCalculation: {
       lineExtensionAmount: lineExtensionAmount,
@@ -567,11 +586,56 @@ function isKapidaOdemeSiparis(order) {
   return gateways.includes("cash on delivery") || gateways.includes("kapida") || gateways.includes("cod");
 }
 
+// 2026-11-05: AD/SOYAD AYRIMI (#14182 vakasi - "M Said Kundu").
+// Mysoft'a bugune kadar sadece birlesik "accountName" gonderiyorduk; Mysoft da
+// bunu KENDI bolup ilk kelimeyi "Ad" sayiyordu. Shopify'da ad "M", soyad
+// "Said Kundu" olarak kayitliydi, Mysoft da "Ad(FirstName) alani 2 haneden az
+// olamaz" diyerek ayni faturayi 8 kez ust uste reddetti.
+// Artik ayrimi BIZ yapip personInfo ile acikca gonderiyoruz:
+//   - ad 2 haneden kisaysa soyadin ilk kelimesi ada tasiniyor -> "M Said"/"Kundu"
+//   - soyad 2 haneden kisaysa adin son kelimesi soyada tasiniyor
+// Ikisi de mumkun degilse (orn. ad "M", soyad "Kundu") gecerli bir ayrim
+// uretilemez; Mysoft yine reddeder ama artik 8 kez bosuna denenmeden ilk
+// seferde Sheets'e alarm yazilir (bkz. kaliciDogrulamaHatasiMi).
+function adSoyadAyir(adRaw, soyadRaw, tamAdRaw) {
+  let ad = String(adRaw || "").trim().replace(/\s+/g, " ");
+  let soyad = String(soyadRaw || "").trim().replace(/\s+/g, " ");
+
+  if (!ad && !soyad) {
+    const p = String(tamAdRaw || "").trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+    if (p.length >= 2) { soyad = p.pop(); ad = p.join(" "); }
+    else { ad = p[0] || ""; }
+  }
+
+  const kisa = (s) => s.replace(/\s/g, "").length < 2;
+
+  while (kisa(ad) && soyad.indexOf(" ") !== -1) {
+    const p = soyad.split(" ");
+    ad = (ad + " " + p.shift()).trim();
+    soyad = p.join(" ");
+  }
+  while (kisa(soyad) && ad.indexOf(" ") !== -1) {
+    const p = ad.split(" ");
+    soyad = (p.pop() + " " + soyad).trim();
+    ad = p.join(" ");
+  }
+
+  return { ad: ad, soyad: soyad, gecerli: !kisa(ad) && !kisa(soyad) };
+}
+
 function buildFaturaPayload(order, faturaTipi, vkn, vergiDairesi, unvan) {
   const addr = order.billing_address || order.shipping_address || {};
   const musteriAdi = unvan ||
     ((order.customer && (order.customer.first_name + " " + order.customer.last_name)) ||
       addr.name || "Belirtilmemis");
+
+  // 2026-11-05: ad/soyad ayrimi. Kurumsal faturada (unvan dolu) kisi bilgisi
+  // gonderilmez; sadece bireysel e-Arsivde gonderilir.
+  const kisi = unvan ? null : adSoyadAyir(
+    (order.customer && order.customer.first_name) || addr.first_name,
+    (order.customer && order.customer.last_name) || addr.last_name,
+    musteriAdi
+  );
 
   const fulfillment = (order.fulfillments && order.fulfillments[0]) || null;
   const kargoTakipNo = fulfillment ? fulfillment.tracking_number : null;
@@ -584,6 +648,8 @@ function buildFaturaPayload(order, faturaTipi, vkn, vergiDairesi, unvan) {
     siparisNo: order.name,
     faturaTarihi: new Date().toISOString().slice(0, 10),
     aliciUnvanAdSoyad: musteriAdi,
+    aliciAd: kisi ? kisi.ad : null,
+    aliciSoyad: kisi ? kisi.soyad : null,
     aliciVknTckn: vkn || null,
     aliciVergiDairesi: vergiDairesi || null,
     aliciAdres: [addr.address1, addr.address2].filter(Boolean).join(" "),
@@ -931,6 +997,19 @@ module.exports = async (req, res) => {
       // riski tasimiyor. Gecici bir Mysoft hatasi/kesintisi olabilecegi icin
       // artik sessizce pes etmiyoruz, artan araliklarla tekrar deniyoruz.
       await releaseFaturaLock(orderNumber);
+
+      // 2026-11-05: KALICI veri/dogrulama hatasinda TEKRAR DENEME YOK.
+      // Ayni veriyle 8 kez denemek sonucu degistirmez, sadece sorunu gizler.
+      if (kaliciDogrulamaHatasiMi(sonuc.mesaj)) {
+        await logFaturaToSheets(orderNumber, faturaTipi, payload.aliciUnvanAdSoyad, payload.genelToplam,
+          "ALARM - KALICI HATA, TEKRAR DENENMEYECEK: " + (sonuc.mesaj || "bilinmeyen") +
+          " - bu bir veri/dogrulama hatasi, ayni veriyle tekrar denemek sonuc vermez. " +
+          "Faturayi Mysoft panelinden ELLE kesin veya veriyi duzeltip yeniden tetikleyin.");
+        console.error("FATURA-KES: KALICI DOGRULAMA HATASI, tekrar denenmeyecek:",
+          orderNumber, sonuc.mesaj);
+        return res.status(200).json({ ok: false, reason: "permanent_validation_error", sonuc: sonuc });
+      }
+
       const planlandi = await planlaTekrarDeneme(orderNumber, deneme + 1, "mysoft_reddetti");
       await logFaturaToSheets(orderNumber, faturaTipi, payload.aliciUnvanAdSoyad, payload.genelToplam,
         "KESILEMEDI: " + (sonuc.mesaj || "bilinmeyen") +
