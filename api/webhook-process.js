@@ -823,7 +823,7 @@ module.exports = async (req, res) => {
     if (orderNumber) {
       console.log("SIPARIS SORGUSU:", orderNumber);
 
-      const sipPromise = jsonFetch(BASE + "/api/siparis", { orderNumber }, 8000)
+      const sipPromise = jsonFetch(BASE + "/api/siparis", { orderNumber, phone: phone }, 8000)
         .then((d) => { console.log("SIPARIS SONUCU:", JSON.stringify(d)); return d; })
         .catch((e) => { console.error("SIPARIS HATA:", e?.message || e); return null; });
 
@@ -835,7 +835,18 @@ module.exports = async (req, res) => {
 
       const [sip, kargo] = await Promise.all([sipPromise, kargoPromise]);
 
-      if ((sip && sip.found) || (kargo && kargo.found)) {
+      // 2026-11-05 GUVENLIK DUZELTMESI (SAHIPLIK):
+      // Yurtici sorgusu (getKargoInfo) SADECE siparis numarasiyla calisiyor,
+      // hicbir sahiplik kontrolu yok. Bu yuzden kargo verisi ancak Shopify
+      // tarafi siparisi BU musteriye ait olarak dogruladiginda kullanilabilir.
+      // /api/siparis sahiplik kontrolunden gecmediyse (sip.found false) kargo
+      // verisi tamamen atilir - musteriye hicbir sekilde gosterilmez.
+      // Eskiden "sip.found VEYA kargo.found" yeterliydi; bu yuzden rastgele bir
+      // sayi yazan musteri baska bir musterinin kargo durumunu, takip
+      // numarasini ve teslim alan kisinin adini gorebiliyordu.
+      const kargoKullanilabilir = !!(sip && sip.found) && !!(kargo && kargo.found);
+
+      if (sip && sip.found) {
         orderNote =
           "[SİPARİŞ & KARGO BİLGİSİ - Aşağıdaki gerçek bilgileri kullanarak müşteriye doğal, sıcak ve net bir dille cevap ver. Asla bilgi uydurma, sadece bunları kullan. Kargo GERÇEKTEN müşteriye teslim edildiyse bunu olumlu söyle; yoldaysa nerede olduğunu ve güncel durumunu söyle. Aşağıda başka bir yönlendirme varsa (örn. şirkete iade notu) onu MUTLAKA önceliklendir ve 'teslim edildi' diye olumlu sunma.]\n";
 
@@ -847,7 +858,7 @@ module.exports = async (req, res) => {
           orderNote += "Sipariş No: " + orderNumber + "\n";
         }
 
-        if (kargo && kargo.found && kargo.sirketeIadeEdildi) {
+        if (kargoKullanilabilir && kargo.sirketeIadeEdildi) {
           // 2026-09-02 KRITIK DUZELTME: Yurtici, paket musteriye ulasmadan
           // bize (sirkete) geri dondugunde de operationStatus="DLV" ("teslim
           // edildi") donduruyor. Bunu duzeltmeden once bot musteriye "kargonuz
@@ -860,7 +871,7 @@ module.exports = async (req, res) => {
           if (kargo.lastUnit) orderNote += "Bulunduğu Yer: " + kargo.lastUnit + "\n";
           if (kargo.reasonExplanation) orderNote += "Not: " + kargo.reasonExplanation + "\n";
           if (kargo.trackingUrl) orderNote += "Takip Linki: " + kargo.trackingUrl + "\n";
-        } else if (kargo && kargo.found) {
+        } else if (kargoKullanilabilir) {
           if (kargo.statusMessage) orderNote += "Kargo Durumu: " + kargo.statusMessage + "\n";
           if (kargo.lastEvent) orderNote += "Son Hareket: " + kargo.lastEvent + "\n";
           if (kargo.lastUnit) orderNote += "Bulunduğu Yer: " + kargo.lastUnit + (kargo.lastCity ? " (" + kargo.lastCity + ")" : "") + "\n";
@@ -874,7 +885,12 @@ module.exports = async (req, res) => {
           // dogru bilgiyi veriyor olabilir, onunla celismesin.
           orderNote += "Kargo Durumu: Şu an Yurtiçi Kargo sisteminden anlık takip bilgisine ulaşılamadı (sistem yoğun olabilir). Yukarıdaki Sipariş Durumu bilgisi geçerlidir; 'henüz kargoya verilmedi' gibi kesin bir iddia kullanma, sadece canlı takip verisinin şu an çekilemediğini söyle.\n";
         }
-      } else if ((sip && sip.reason === "not_found") && (!kargo || !kargo.found)) {
+      } else if (sip && sip.reason === "baska_musteri") {
+        // Siparis var ama bu WhatsApp numarasina ait degil. Siparisin VAR
+        // OLDUGUNU bile sizdirmiyoruz.
+        orderNote =
+          "[SİSTEM NOTU: " + orderNumber + " numaralı sipariş bu WhatsApp numarasına ait görünmüyor. Güvenlik gereği bu sipariş hakkında HİÇBİR bilgi (durum, ödeme, kargo, takip numarası, isim, adres) verme ve siparişin var olup olmadığı konusunda hiçbir şey söyleme. Müşteriye nazikçe sipariş numarasını kontrol etmesini, siparişi verdiği telefon numarasından yazmasını söyle; dilerse 0553 068 16 19 veya 0551 148 53 44 numaralarından yardımcı olunabileceğini belirt. Numara uydurma.]";
+      } else if (sip && sip.reason === "not_found") {
         orderNote =
           "[SİSTEM NOTU: " + orderNumber + " numaralı sipariş bulunamadı. Müşteriye nazikçe sipariş numarasını kontrol etmesini söyle; emin değilse 0553 068 16 19 veya 0551 148 53 44 numaralarından yardımcı olunabileceğini belirt. Numara uydurma.]";
       } else {
