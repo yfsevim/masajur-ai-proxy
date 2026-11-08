@@ -11,6 +11,7 @@
     "api/gelen-faturalar.js": { "maxDuration": 120 }
   },
   "crons": [
-    { "path": "/api/gelen-faturalar?secret=masajur_yakkoholding_2128&gun=10", "schedule": "40 4 * * *" }
+    { "path": "/api/gelen-faturalar?secret=masajur_yakkoholding_2128&gun=10", "schedule": "40 4 * * *" },
+    { "path": "/api/ig-token-yenile", "schedule": "15 2 * * *" }
   ]
 }
