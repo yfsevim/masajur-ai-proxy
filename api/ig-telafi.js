@@ -11,9 +11,9 @@
 // Sadece okur ve listeler. Telafiyi gercekten uygulamak ayri bir adim.
 //
 // KULLANIM:
-//   /api/ig-telafi?secret=<API_SECRET>
-//   /api/ig-telafi?secret=<API_SECRET>&baslangic=2026-11-07T15:00:00Z
-//   /api/ig-telafi?secret=<API_SECRET>&gonderi=40     (kac gonderi taransin)
+//   /api/ig-telafi?secret=<TELAFI_SECRET>
+//   /api/ig-telafi?secret=<TELAFI_SECRET>&baslangic=2026-11-07T15:00:00Z
+//   /api/ig-telafi?secret=<TELAFI_SECRET>&gonderi=40  (kac gonderi taransin)
 //
 // baslangic verilmezse varsayilan: token'in oldugu an (7 Kasim 2026 15:20 UTC).
 //
@@ -46,11 +46,20 @@ async function jsonGetir(url) {
 }
 
 module.exports = async (req, res) => {
+  // Iki sifreden biri kabul edilir:
+  //  - TELAFI_SECRET: bu is icin ozel, tek kullanimlik. Is bitince Vercel'den
+  //    silinebilir; silinince bu uc tamamen kapanir (API_SECRET de yoksa).
+  //  - API_SECRET: diger uclarla ayni sifre.
+  const telafiSecret = process.env.TELAFI_SECRET || null;
   const apiSecret = process.env.API_SECRET || null;
-  if (!apiSecret) {
-    return res.status(500).json({ ok: false, hata: "API_SECRET ayarlanmamis" });
+  if (!telafiSecret && !apiSecret) {
+    return res.status(500).json({ ok: false, hata: "TELAFI_SECRET/API_SECRET ayarlanmamis" });
   }
-  if (!req.query || req.query.secret !== apiSecret) {
+  const verilen = req.query ? req.query.secret : null;
+  const gecerli =
+    (!!telafiSecret && verilen === telafiSecret) ||
+    (!!apiSecret && verilen === apiSecret);
+  if (!gecerli) {
     return res.status(401).json({ ok: false, hata: "yetkisiz" });
   }
 
