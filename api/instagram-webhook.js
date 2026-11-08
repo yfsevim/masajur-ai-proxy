@@ -89,6 +89,11 @@
 const { Redis } = require("@upstash/redis");
 const redis = Redis.fromEnv();
 
+// 2026-11-08 EKLENDI: Instagram token artik lib/ig-token.js uzerinden okunuyor.
+// Once Redis'teki OTOMATIK YENILENMIS token'a, o yoksa ortam degiskenine bakar.
+// Sebep: 60 gunluk token suresi dolunca bot sessizce susuyordu.
+const { igTokenAl } = require("../lib/ig-token");
+
 const SECRET = "masajur_yakkoholding_2128";
 // Meta konsolundaki "Verify token" kutusuna AYNEN bu deger girilecek:
 const IG_VERIFY_TOKEN = "masajur_ig_dogrulama_2026";
@@ -227,8 +232,9 @@ async function bildirOlumsuzYorum(kaynakEtiketi, mesajMetni) {
 // bildirimde yer alir (WhatsApp'taki gibi telefon numarasi yok cunku).
 async function igKullaniciAdiGetir(igUserId) {
   try {
+    const igToken = await igTokenAl();
     const resp = await fetch(
-      `https://graph.instagram.com/v23.0/${igUserId}?fields=username&access_token=${process.env.INSTAGRAM_ACCESS_TOKEN}`
+      `https://graph.instagram.com/v23.0/${igUserId}?fields=username&access_token=${igToken}`
     );
     const data = await resp.json();
     return data && data.username ? data.username : null;
@@ -906,10 +912,11 @@ async function kullaniciyaCevapUret(igUserId, kullaniciMesaji) {
 
 async function instagramMesajGonder(recipient, text) {
   try {
+    const igToken = await igTokenAl();
     const resp = await fetch(`https://graph.instagram.com/v23.0/${IG_ACCOUNT_ID}/messages`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.INSTAGRAM_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${igToken}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({ recipient, message: { text } })
@@ -927,10 +934,11 @@ async function instagramMesajGonder(recipient, text) {
 
 async function yorumaPublicYanitVer(commentId, text) {
   try {
+    const igToken = await igTokenAl();
     const resp = await fetch(`https://graph.instagram.com/v23.0/${commentId}/replies`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.INSTAGRAM_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${igToken}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({ message: text })
@@ -961,8 +969,9 @@ async function yorumaPublicYanitVer(commentId, text) {
 // yorumlar silinebilir - zaten webhook sadece onlari getiriyor.
 async function yorumuSil(commentId, etiket) {
   try {
+    const igToken = await igTokenAl();
     const resp = await fetch(
-      `https://graph.instagram.com/v23.0/${commentId}?access_token=${process.env.INSTAGRAM_ACCESS_TOKEN}`,
+      `https://graph.instagram.com/v23.0/${commentId}?access_token=${igToken}`,
       { method: "DELETE" }
     );
     const data = await resp.json().catch(() => ({}));
