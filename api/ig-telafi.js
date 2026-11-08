@@ -50,17 +50,29 @@ module.exports = async (req, res) => {
   //  - TELAFI_SECRET: bu is icin ozel, tek kullanimlik. Is bitince Vercel'den
   //    silinebilir; silinince bu uc tamamen kapanir (API_SECRET de yoksa).
   //  - API_SECRET: diger uclarla ayni sifre.
-  const telafiSecret = process.env.TELAFI_SECRET || null;
-  const apiSecret = process.env.API_SECRET || null;
+  // Bastaki/sondaki gorunmez bosluklar temizleniyor: Vercel'e deger
+  // yapistirirken sona bosluk ya da satir sonu kacmasi cok yaygin bir hata.
+  function temiz(v) { return v === null || v === undefined ? null : String(v).trim(); }
+  const telafiSecret = temiz(process.env.TELAFI_SECRET) || null;
+  const apiSecret = temiz(process.env.API_SECRET) || null;
   if (!telafiSecret && !apiSecret) {
     return res.status(500).json({ ok: false, hata: "TELAFI_SECRET/API_SECRET ayarlanmamis" });
   }
-  const verilen = req.query ? req.query.secret : null;
+  const verilen = temiz(req.query ? req.query.secret : null);
   const gecerli =
     (!!telafiSecret && verilen === telafiSecret) ||
     (!!apiSecret && verilen === apiSecret);
   if (!gecerli) {
-    return res.status(401).json({ ok: false, hata: "yetkisiz" });
+    // ?tani=1 ile sorunun NEREDE oldugunu gosterir. Sifre degeri ASLA
+    // yazilmaz, sadece "tanimli mi" bilgisi doner.
+    const tani = req.query && req.query.tani === "1"
+      ? {
+          telafiSecretTanimli: !!telafiSecret,
+          apiSecretTanimli: !!apiSecret,
+          sifreGonderildiMi: !!verilen
+        }
+      : undefined;
+    return res.status(401).json({ ok: false, hata: "yetkisiz", tani: tani });
   }
 
   const token = await igTokenAl();
