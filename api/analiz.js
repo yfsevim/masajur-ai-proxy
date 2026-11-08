@@ -40,7 +40,12 @@ const BOT_PROMPT = require("../lib/bot-prompt-kopya");
 const SECRET = "masajur_yakkoholding_2128";
 
 const MODEL = "claude-sonnet-4-6";
-const MAX_TOKENS = 4000;
+// 2026-11-08: 4000'den 16000'e cikarildi. Yogun gunlerde model daha cok bulgu
+// yaziyordu, cevap 4000 token'da kesiliyor ve JSON yarim kaldigi icin O GUNUN
+// TAMAMI cope gidiyordu (01.11, 04.11, 05.11 boyle kayboldu). Cikis token'i
+// sadece gercekten yazilan kadar ucretlendirilir, yani tavani yukseltmek
+// kendi basina maliyet getirmez.
+const MAX_TOKENS = 16000;
 
 // Bir gunde beklenen satir sayisi ~30-60. Bu tavan, beklenmedik bir durumda
 // (ornegin Sheets yanlis tarih donerse) devasa bir istek atip para yakmayi
@@ -274,6 +279,13 @@ function konusmalariDuzenle(satirlar) {
 // duruyoruz; sonrasi yok sayiliyor. Tirnak icindeki { } isaretleri (orn.
 // musteri mesajinda gecen) sayilmiyor, kacis karakterleri (\") dogru
 // isleniyor.
+//
+// 2026-11-08 EKLENDI - KISMI KURTARMA:
+// Cevap token tavaninda kesilirse JSON kapanmaz. Eskiden bu durumda hata
+// firlatiliyor ve GUNUN TAMAMI kayboluyordu. Artik: bir dizinin icinde
+// TAM olarak kapanmis son elemana kadar geri sariliyor, acik kalan
+// parantezler kapatiliyor ve o ana kadarki bulgular kurtariliyor.
+// Donus: { veri, kismi } - kismi=true ise cevap kesilmisti.
 function jsonCikar(metin) {
   const s = String(metin || "");
   const bas = s.indexOf("{");
@@ -281,9 +293,11 @@ function jsonCikar(metin) {
     throw new Error("Cevapta JSON bulunamadi: " + s.slice(0, 200));
   }
 
-  let derinlik = 0;
+  const yigin = [];        // acik parantezler sirasiyla: "{" veya "["
   let tirnakIcinde = false;
   let kacis = false;
+  let guvenliSon = -1;     // bir dizi elemaninin TAM kapandigi son konum
+  let guvenliYigin = null; // o andaki acik parantezlerin kopyasi
 
   for (let i = bas; i < s.length; i++) {
     const c = s[i];
@@ -293,11 +307,30 @@ function jsonCikar(metin) {
       else if (c === '"') tirnakIcinde = false;
       continue;
     }
-    if (c === '"') tirnakIcinde = true;
-    else if (c === "{") derinlik++;
-    else if (c === "}") {
-      derinlik--;
-      if (derinlik === 0) return JSON.parse(s.slice(bas, i + 1));
+    if (c === '"') { tirnakIcinde = true; continue; }
+    if (c === "{" || c === "[") { yigin.push(c); continue; }
+    if (c === "}" || c === "]") {
+      yigin.pop();
+      if (yigin.length === 0) {
+        return { veri: JSON.parse(s.slice(bas, i + 1)), kismi: false };
+      }
+      if (yigin[yigin.length - 1] === "[") {
+        guvenliSon = i;
+        guvenliYigin = yigin.slice();
+      }
+    }
+  }
+
+  // Buraya dusuyorsak cevap yarida kesilmis. Kurtarmayi dene.
+  if (guvenliSon !== -1 && guvenliYigin) {
+    let parca = s.slice(bas, guvenliSon + 1);
+    for (let k = guvenliYigin.length - 1; k >= 0; k--) {
+      parca += guvenliYigin[k] === "[" ? "]" : "}";
+    }
+    try {
+      return { veri: JSON.parse(parca), kismi: true };
+    } catch (e) {
+      // kurtarilamadi, asagidaki hataya dusulecek
     }
   }
   throw new Error("Cevaptaki JSON yarim kalmis (kapanmamis): " + s.slice(0, 200));
@@ -385,14 +418,29 @@ async function analizEt(konusmaMetni) {
   const metin = veri && veri.content && veri.content[0] && veri.content[0].text;
   if (!metin) throw new Error("Anthropic cevabinda metin yok");
 
-  const sonuc = jsonCikar(metin);
+  if (veri.stop_reason === "max_tokens") {
+    console.warn("ANALIZ UYARI: cevap token tavanina takildi (max_tokens) - tam olan bulgular kurtarilacak");
+  }
+
+  const cikti = jsonCikar(metin);
+  const sonuc = cikti.veri;
+  if (cikti.kismi) {
+    console.warn(
+      "ANALIZ UYARI: JSON yarim kalmisti, KISMI KURTARMA yapildi - kurtarilan bulgu sayisi:",
+      Array.isArray(sonuc.sorunlar) ? sonuc.sorunlar.length : 0
+    );
+  }
   const kullanim = veri.usage || {};
 
   return {
     enCokSorulanlar: Array.isArray(sonuc.enCokSorulanlar) ? sonuc.enCokSorulanlar : [],
     kizginMusteri: Number(sonuc.kizginMusteri) || 0,
     kacanSatis: Number(sonuc.kacanSatis) || 0,
-    oneri: String(sonuc.oneri || ""),
+    // Kismi kurtarma olduysa raporu okuyan kisi bunu GORMELI, yoksa eksik
+    // bir gun tam sanilir.
+    oneri: (cikti.kismi
+      ? "[UYARI: modelin cevabi token tavaninda kesildi, bu gunun bulgulari eksik olabilir] "
+      : "") + String(sonuc.oneri || ""),
     sorunlar: Array.isArray(sonuc.sorunlar) ? sonuc.sorunlar : [],
     girisToken: kullanim.input_tokens || 0,
     cikisToken: kullanim.output_tokens || 0
