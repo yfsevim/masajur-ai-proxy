@@ -25,8 +25,21 @@ module.exports = async (req, res) => {
   if (req.method === "POST") {
     try {
       const value = req.body?.entry?.[0]?.changes?.[0]?.value;
-      const message = value?.messages?.[0]?.text?.body;
-      const phone = value?.messages?.[0]?.from;
+      const mesajNesnesi = value?.messages?.[0];
+
+      // 2026-11-08 DUZELTME: eskiden SADECE text.body okunuyordu. Sablon
+      // hizli cevap dugmelerine basildiginda Meta mesaji text olarak DEGIL
+      // type:"button" olarak gonderiyor; o yuzden "Katilmak istiyorum" ve
+      // "Simdilik istemiyorum" gibi dugmeler burada bos sayilip cope
+      // atiliyordu ve webhook-process.js'e HIC ulasmiyordu. webhook-process
+      // tarafi 25.10'da dugme okuyacak sekilde duzeltilmisti ama onundeki
+      // bu dosya duzeltilmemisti - yani o duzeltme hic calisamiyordu.
+      const message =
+        mesajNesnesi?.text?.body ||
+        mesajNesnesi?.button?.text ||
+        mesajNesnesi?.interactive?.button_reply?.title ||
+        "";
+      const phone = mesajNesnesi?.from;
 
       if (!message || !phone) {
         console.log("MESAJ VEYA TELEFON YOK - islenmeyecek webhook (durum/okundu bildirimi olabilir)");
