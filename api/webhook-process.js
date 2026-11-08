@@ -762,7 +762,9 @@ module.exports = async (req, res) => {
       await duzMetinGonder(
         phone,
         "Harika, çok teşekkür ederiz 🙂 Ekibimiz en kısa sürede sizinle " +
-        "iletişime geçip video gönderim detaylarını ve ödül tercihinizi konuşacak."
+        "iletişime geçip video gönderim detaylarını ve ödül tercihinizi konuşacak. " +
+        "Dilerseniz siz de 0553 068 16 19 veya 0551 148 53 44 numaralarımıza " +
+        "yazıp bilgi alabilirsiniz; 12.30 ile 20.00 arasında size geri dönüş yapılıyor."
       );
       for (const num of ALERT_NUMBERS) {
         await sendAlertTo(num, phone, "VIDEO TEKLIFINI KABUL ETTI - memnuniyet videosu cekmek istiyor, detaylari paylasin");
