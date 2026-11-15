@@ -1024,7 +1024,17 @@ module.exports = async (req, res) => {
     // Sohbeti Sheets'e kaydet
     // 2026-10-07: wamid artik Sheets'e de gonderiliyor - Apps Script ayni
     // kimlikli ikinci istegi yazmadan geri ceviriyor (mukerrer satir sonu).
-    await logToSheets(phone, message, reply, messageId);
+    //
+    // 2026-11-15 KRITIK DUZELTME - ANALIZIN KOR NOKTASI:
+    // Buraya eskiden HAM musteri mesaji yaziliyordu. Oysa bota giden metin
+    // claudeMessage'ti, yani basinda [SIPARIS & KARGO BILGISI] sistem notu
+    // vardi. Sheets'te sistem notu gorunmedigi icin api/analiz.js botun ne
+    // gordugunu BILEMIYOR ve "sistem notu yokken durum uydurmus" diye
+    // isaretliyordu. 10-14 Kasim'daki 35 bulgunun 12'si tam olarak buydu ve
+    // Shopify'dan kontrol edilince cogunun bot HAKLI cikti (#14695, #14602,
+    // #14819 gercekten o durumdaydi). Artik bota ne gittiyse o yaziliyor;
+    // sistem notu YOKSA satir eskisi gibi sadece musteri mesajidir.
+    await logToSheets(phone, claudeMessage, reply, messageId);
 
     // Riskli kelime varsa yetkililere bildir
     if (needsAlert(message)) {
