@@ -1154,6 +1154,38 @@ const DESTEK_SINYALLERI = [
 // yasak ama model kurallari tekrar tekrar cigniyor (😊 icin 11.10 analizi +
 // 12.10 canli test, markdown yildizi icin 13.10 analizi). Iki kez tutmayan
 // prompt kurali koda alinir.
+// 2026-11-15: "ister misiniz?" biciminde siparis daveti promptta UC AYRI
+// YERDE yasak (SIPARIS DAVETI (CTA) bolumu + ALTIN KURAL) ama model kurali
+// UCUNCU kez kirdi: 02.11 analizi, 11.11 analizi ve 15.11 canli testi
+// ("Sipariş vermek ister misiniz, hemen yardımcı olayım 🙂"). Emoji ve
+// markdown ile ayni sinif: uc kez tutmayan prompt kurali KODA alinir.
+// Yasak cumlenin TAMAMI (cumle sinirindan noktalama/satir sonuna kadar)
+// degistiriliyor; sadece kaliba dokunmak dilbilgisi bozuk artik birakirdi.
+const CTA_YASAK_KALIP = /[^.!?\n]*(sipariş vermek ister misiniz|siparis vermek ister misiniz|almak ister misiniz|satın almak ister misiniz|satin almak ister misiniz|sipariş oluşturmamı ister misiniz|siparis olusturmami ister misiniz|siparişinizi oluşturayım mı|siparisinizi olusturayim mi|sipariş oluşturayım mı|isterseniz sipariş verebilirsiniz|isterseniz siparis verebilirsiniz|nasıl ilerlemek isterseniz|nasil ilerlemek isterseniz)[^.!?\n]*[.!?]*/gi;
+
+const CTA_DOGRU = "Siparişinizi buradan oluşturmak isterseniz ad soyad ve açık adresinizi yazmanız yeterli.";
+
+function ctaDuzelt(metin, mod) {
+  let s = String(metin || "");
+  CTA_YASAK_KALIP.lastIndex = 0;
+  if (!CTA_YASAK_KALIP.test(s)) { CTA_YASAK_KALIP.lastIndex = 0; return s; }
+  CTA_YASAK_KALIP.lastIndex = 0;
+
+  // DESTEK modunda siparise davet ZATEN yasak - yasak cumleyi sadece sil,
+  // yerine satis cumlesi KOYMA. Ayni sekilde cevapta dogru davet zaten
+  // varsa ikinci kez ekleme.
+  const zatenDavetVar = /ad soyad ve açık adres/i.test(s);
+  const yerine = (mod === "destek" || zatenDavetVar) ? "" : CTA_DOGRU;
+
+  s = s.replace(CTA_YASAK_KALIP, yerine);
+  s = s.replace(/[ \t]{2,}/g, " ")
+       .replace(/[ \t]+\n/g, "\n")
+       .replace(/\n{3,}/g, "\n\n")
+       .trim();
+  console.warn("CTA DUZELTME: yasak 'ister misiniz' kalibi temizlendi (mod=" + (mod || "?") + ")");
+  return s;
+}
+
 function metniTemizle(metin) {
   let s = String(metin || "");
   s = s.replace(/\u{1F60A}/gu, "\u{1F642}");   // 😊 -> 🙂
@@ -1491,6 +1523,7 @@ module.exports = async (req, res) => {
     // 2026-10-12: promptta "😊 kullanma, 🙂 kullan" kurali var ama model bunu
     // tekrar tekrar cigniyordu (11.10 analizinde de yakalandi, canli testte de).
     // Iki kez basarisiz olan bir prompt kurali koda alinir.
+    musteriMetni = ctaDuzelt(musteriMetni, mod);
     musteriMetni = metniTemizle(musteriMetni);
 
     return res.status(200).json({ reply: musteriMetni, medya: medyaAyirma.medya || null });
