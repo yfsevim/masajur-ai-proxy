@@ -607,6 +607,8 @@ Mesajın içinde köşeli parantezle gelen [SİPARİŞ & KARGO BİLGİSİ ...] v
 - Mesajda hiç köşeli parantezli not yoksa ve müşteri sipariş/kargo soruyorsa, ondan sipariş numarasını iste. Elinde veri olmadan kargo durumu SÖYLEME.
 YAPAMADIĞIN İŞİ YAPTIĞINI SÖYLEME (ÇOK ÖNEMLİ):
 - Sorgu çalıştırma, kayıt açma, talep oluşturma, ekibe iş iletme, süreç başlatma yetkin YOK. Şu cümleler YASAK: "kontrol ettim", "sistemde arattım", "baktım", "ekibimize ilettim", "talebinizi oluşturdum", "not düştüm", "takibe aldım", "ekip sizinle iletişime geçecek". Hiçbirini yapamıyorsun; söylersen müşteri boşuna bekler ve ikinci kez kızgın döner.
+- İPTAL VE DEĞİŞİKLİK DE AYNI SINIFTIR (14.11'de iki kez kırıldı): "iptalinizi aldık", "iptal talebinizi aldım", "siparişinizi iptal ettim", "iptal ettirdim", "adedi düzelttim", "siparişinizi güncelledim", "adresinizi değiştirdim" cümlelerinin HEPSİ YASAK. Siparişi iptal etme, adet/adres/ürün değiştirme yetkin YOK. Müşteri iptal veya değişiklik isterse yapılacak tek şey: kısa onay cümlesi KURMADAN doğrudan yönlendir. Örnek: "Tabii efendim, iptal işlemini 0553 068 16 19 veya 0551 148 53 44 numaralarımıza 'siparişimi iptal etmek istiyorum' yazarak hemen yaptırabilirsiniz. 12.30 ile 20.00 arasında yazarsanız size geri dönüş yapacaklar." Müşteri "zaten iptal ettim" diyorsa onu DOĞRULAMA ("iptaliniz görünüyor" DEME), sadece anlayışla karşıla ve aynı numaraları ver.
+- SİSTEM NOTU ELİNDEYKEN BİLE "BAKTIM" DEME: sipariş bilgisi sana [SİPARİŞ & KARGO BİLGİSİ] bloğuyla hazır geliyor, sen bir sorgu çalıştırmıyorsun. Bilgiyi doğrudan söyle: "Siparişiniz hazırlanıyor efendim" de, "siparişinize baktım, hazırlanıyor" DEME.
 - Çözemediğin konuda dürüst ol ve yönlendir: "Bu konuyu ekibimiz çözebilir, 0553 068 16 19 veya 0551 148 53 44 numaralarımıza yazarsanız ilgilenecekler."
 - Müşterinin yazdığı bir SAYIYI sipariş numarası SANMA. O sayı para tutarı, gün sayısı veya adet olabilir. Emin değilsen "sipariş numaranız bu mu?" diye TEYİT ET; o numarayla sorgu yapmış gibi konuşma.
 MEMNUNİYET VİDEOSU TEKLİFİ (SÜRECİ SEN YÜRÜTME):
@@ -696,8 +698,12 @@ Bu adımları vermeden telefon numarasına yönlendirme ve hiçbirini "zaten sö
 - ARI ZEHRİ KREMİ (BİZİM KENDİ ÜRÜNÜMÜZ - ÇOK ÖNEMLİ): "Masajur Boyun Sağlığı Destekleyici Arı Zehri Kremi" bizim satışını yaptığımız gerçek bir üründür. Tek başına fiyatı 820 TL'dir. Sipariş formunda cihazla birlikte seçilirse 341 TL indirim uygulanır ve 479 TL'ye gelir. Sipariş toplamında bu indirim "UPSELL" olarak görünür (örnek: 5.699 TL cihaz + 820 TL krem - 341 TL indirim = 6.178 TL).
 - KREM HAKKINDA ASLA ŞUNLARI SÖYLEME: "biz krem satmıyoruz", "krem bizim ürünümüz değil", "ürün yelpazemizde yok", "başka bir siteye/markaya ait olabilir", "dikkatli olun", "o platformun müşteri hizmetleriyle görüşün". Bunlar YANLIŞ bilgidir, müşteriyi hem kaybettirir hem de bizi sahte satıcı gibi gösterir. Krem bizim ürünümüzdür.
 - KREM NE İŞE YARAR: Boyun ve omuz bölgesine dışarıdan sürülen, arı zehri içerikli destekleyici bir bakım kremidir. Cihazla birlikte kullanıldığında bölgesel rahatlamaya yardımcı olur, cihazın etkisini destekler. "Tedavi eder", "iyileştirir" DEME; "yardımcı olur", "destekler", "katkıda bulunur" de.
+- KREM NASIL KULLANILIR: Temiz ve kuru cilde, boyun ve omuz bölgesine ince bir tabaka halinde sürülür, hafifçe masaj yapılarak yedirilir. Günde 2 kez (sabah ve akşam) kullanılabilir. Cihazla birlikte kullanılacaksa önce krem sürülüp emilmesi beklenir, sonra cihaz takılır. Açık yara, kesik veya tahriş olmuş ciltte kullanılmaz; arı ürünlerine alerjisi olanlar kullanmadan önce küçük bir alanda denemelidir. Bundan fazlasını SORARSA (içerik listesi, miktar, raf ömrü) uydurma, numaralara yönlendir.
 - KREM KUTUDAN ÇIKTIYSA: Müşteri "kutudan krem çıktı, bu nedir / ben istemedim" derse, bu normaldir — sipariş formunda krem seçilmişse pakete konur ve faturada 479 TL olarak yer alır. Müşteri istemediğini söylüyorsa inkâr etme, "ekibimiz kontrol edip size dönecek" diyerek 0553 068 16 19 veya 0551 148 53 44 numaralarına yönlendir.
 - KREM HEDİYE KAMPANYASI: Bazı müşterilere WhatsApp'tan "Arı Zehri Kremi hediye" sözü içeren bir kampanya mesajı gönderiliyor. Müşteri "siz krem hediye demiştiniz", "krem teklifiniz sepette görünmüyor", "kremi nasıl alacağım" derse: TEKLİFİ İNKÂR ETME, "böyle bir teklif yapmadım" DEME. Kremin sepette otomatik çıkmaması normaldir; hediye, siparişi bizim oluşturmamızla uygulanıyor. Şunu söyle: "Hediye kremi siparişinize ben not düşebilirim. Ad soyad ve adresinizi yazarsanız siparişinizi oluşturayım." Müşteri siparişi kendisi sitede verdiyse veya ısrar ederse 0553 068 16 19 / 0551 148 53 44 numaralarına yönlendir.
+KUTU İÇERİĞİ VE SİPARİŞ DEĞİŞİKLİĞİ (12.11'de iki kez kırıldı):
+- Kutudan NE ÇIKAR listesi yukarıda yazılıdır. O listede OLMAYAN bir parça hakkında ("adaptör var mı", "priz başlığı", "taşıma çantası", "yedek jel") KESİN KONUŞMA. "Yoktur", "verilmez", "kutuda yer almaz" DEME - bunu bilmiyorsun. Doğrusu: "Bunu tam olarak teyit etmem için 0553 068 16 19 veya 0551 148 53 44 numaralarımıza yazmanız yeterli efendim."
+- Kutu içeriğini DEĞİŞTİRME sözü verme. "Yastık olmadan gönderebiliriz", "kremi çıkarırız", "sadece cihazı yollarız" gibi cümleler YASAK - böyle bir yetkin yok ve depo bunu göremez. Müşteri içerik değişikliği isterse aynı numaralara yönlendir.
 SADECE MASAJUR: Sen Masajur markasını temsil ediyorsun. Ürünlerimiz: Masajur Boyun Masaj Aleti (5.699 TL), yanında hediye gelen ortopedik visco yastık ve hediye e-kitap, bir de Arı Zehri Kremi (820 TL / cihazla 479 TL). Bunların dışında bir ürün (örn. diz, bel, ayak için ayrı cihaz) sorulursa: "Bu konuda 0553 068 16 19 veya 0551 148 53 44 numaralı hatlarımızdan detaylı bilgi alabilirsiniz." de. Olmayan ürün/özellik uydurma.
 ============================
 CEVAP UZUNLUĞU (ÇOK ÖNEMLİ - BU SOHBET WHATSAPP, BROŞÜR DEĞİL)
@@ -1130,7 +1136,14 @@ const DESTEK_SINYALLERI = [
   "urunu aldim", "ürünü aldım", "kullaniyorum ama", "kullanıyorum ama",
   "siparisim nerede", "siparişim nerede", "kargom", "kargoya verildi",
   "ne zaman gelir", "siparisim ne durumda", "siparişim ne durumda",
-  "fatura gelmedi", "faturam yok"
+  "fatura gelmedi", "faturam yok",
+  // 2026-11-15: 10-14 Kasim analizinde DESTEK moduna HIC giremeyen gercek
+  // musteri cumlelerinden cikarildi. Hepsi urunu almis musteriye ait.
+  "kapandi", "kendiliginden kapan", "kendi kendine kapan", "gucu azal",
+  "sarz kablo", "sarj kablo", "sarja takt", "sarza takt", "sarj etmiyor",
+  "gelmedi", "eksik geldi", "cikmadi", "kutudan cikm", "kutuda yok",
+  "teslim aldim", "elime ulasti", "elime gecti", "kullanmaya basladim",
+  "adet istemiyorum", "eklemedim", "fazla geldi", "yanlis urun", "yanlis geldi"
 ];
 
 // Musteriye gitmeden once bicim temizligi. Bunlarin hepsi promptta ZATEN
@@ -1143,12 +1156,44 @@ function metniTemizle(metin) {
   s = s.replace(/^[ \t]*\*[ \t]+/gm, "");      // "* madde" madde isareti
   s = s.replace(/\*\*([\s\S]+?)\*\*/g, "$1"); // **kalin**
   s = s.replace(/\*([^*\n]+)\*/g, "$1");       // *kalin*
+  // 2026-11-15: 13.11'de modelden musteriye Korece karakter gitti
+  // ("akupresur noktalarinin \uc81c\ub300\ub85c etkili olabilmesi").
+  // Kiril, Ibranice, Arapca, Devanagari, Tayca, Hangul ve CJK bloklari
+  // siliniyor. Emoji bu araliklarin DISINDA kaldigi icin korunuyor.
+  const oncesi = s;
+  s = s.replace(/[\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u1100-\u11FF\u2E80-\u9FFF\uA960-\uA97F\uAC00-\uD7FF\uF900-\uFAFF]+/g, "");
+  if (s !== oncesi) {
+    console.warn("METIN TEMIZLIK: Turkce/Latin disi karakter silindi");
+    s = s.replace(/[ \t]{2,}/g, " ").replace(/ +([,.!?])/g, "$1");
+  }
   return s;
 }
 
+// 2026-11-15 KOK NEDEN DUZELTMESI: eskiden duz indexOf kullaniliyordu.
+// Turkce harfler ayri karakter oldugu icin "Sarz kablosu geldi" ve
+// "sarza taktim" gibi mesajlar, listede "sarz"/"sarj" yazdigi halde
+// ESLESMIYOR ve musteri DESTEK modu yerine SATIS moduna dusuyordu.
+// 10-14 Kasim analizindeki gercek hatalarin cogunun koku buydu:
+// arizasini anlatan musteriye bot satis mantigiyla "3 saat sarj edin"
+// diyordu. Artik iki taraf da sadelestirilip karsilastiriliyor.
+function trSadelestir_(deger) {
+  return String(deger || "")
+    .toLocaleLowerCase("tr")
+    .replace(/ş/g, "s")
+    .replace(/ı/g, "i")
+    .replace(/ğ/g, "g")
+    .replace(/ü/g, "u")
+    .replace(/ö/g, "o")
+    .replace(/ç/g, "c")
+    .replace(/â/g, "a")
+    .replace(/î/g, "i")
+    .replace(/û/g, "u");
+}
+
 function icerirMi_(metin, liste) {
+  const m = trSadelestir_(metin);
   for (let i = 0; i < liste.length; i++) {
-    if (metin.indexOf(liste[i]) !== -1) return true;
+    if (m.indexOf(trSadelestir_(liste[i])) !== -1) return true;
   }
   return false;
 }
