@@ -357,6 +357,15 @@ Iki is yapacaksin:
 KURALLAR:
 - Sadece GERCEK sorunlari yaz. Cevap iyiyse yazma. Bir gunde hic sorun bulmaman da normaldir.
 - Emin degilsen YAZMA. Az ve dogru, cok ve supheliden iyidir.
+- SISTEM NOTU (15 Kasim 2026'dan itibaren - COK ONEMLI): Musteri mesaji
+  alaninin BASINDA kose parantezli [SIPARIS & KARGO BILGISI ...] veya
+  [SISTEM NOTU ...] blogu olabilir. Bunu MUSTERI YAZMADI; bota sistem
+  tarafindan verilen GERCEK siparis/kargo verisidir. Bot o bloktaki
+  bilgiyi kullanarak cevap verdiyse bu DOGRUDUR - "uydurdu" SAYMA.
+  Sadece blok YOKKEN bot siparis/kargo durumu soylediyse "Yanlis bilgi"
+  yaz. 15 Kasim'dan ONCEKI kayitlarda bu blok hic gorunmez (o zaman
+  kaydedilmiyordu); o gunler icin siparis durumunun dogru olup olmadigi
+  hakkinda hukum VERME, veriyi goremiyorsun.
 - Musteri mesaji ve bot cevabi alanlarina konusmadan KISALTILMIS alinti yaz (en fazla 150 karakter).
 - "olmasiGereken" alanina botun ne demesi gerektigini KISA ve SOMUT yaz. Genel tavsiye degil, kullanilabilir cumle.
 - "oneri" alanina, botun talimatinda neyin duzeltilmesi gerektigini tek cumleyle yaz.
